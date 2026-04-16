@@ -2921,6 +2921,21 @@ class GuidedSVSManager:
             loader_kwargs["prefetch_factor"] = max(2, int(prefetch_factor))
         return DataLoader(dataset, shuffle=shuffle, **loader_kwargs)
 
+    def _is_loader_runtime_error(self, exc: BaseException) -> bool:
+        message = str(exc or "").lower()
+        if not message:
+            return False
+        return any(
+            token in message
+            for token in (
+                "pin memory thread exited unexpectedly",
+                "dataloader worker",
+                "worker exited unexpectedly",
+                "received 0 items of ancdata",
+                "connection reset by peer",
+            )
+        )
+
     def _filter_training_entries(
         self,
         entries: Sequence[Dict[str, object]],
@@ -4262,111 +4277,155 @@ class GuidedSVSManager:
             ),
             84,
         )
+        loader_safe_mode = False
 
         for epoch in range(1, int(config["total_epochs"]) + 1):
             if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
                 stopped_early = True
                 break
-            generator.train()
-            discriminator.train()
-            train_sums = {
-                "generator_total": 0.0,
-                "wave": 0.0,
-                "stft": 0.0,
-                "adv": 0.0,
-                "feature_matching": 0.0,
-                "discriminator": 0.0,
-            }
-            train_batches = 0
-            train_samples = 0
-            epoch_started = time.time()
-            for batch in train_loader:
-                if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
-                    stopped_early = True
+            while True:
+                try:
+                    generator.train()
+                    discriminator.train()
+                    train_sums = {
+                        "generator_total": 0.0,
+                        "wave": 0.0,
+                        "stft": 0.0,
+                        "adv": 0.0,
+                        "feature_matching": 0.0,
+                        "discriminator": 0.0,
+                    }
+                    train_batches = 0
+                    train_samples = 0
+                    epoch_started = time.time()
+                    active_worker_count = 0 if loader_safe_mode else int(profile.get("num_workers", 0))
+                    active_prefetch_factor = 2 if loader_safe_mode else int(profile.get("prefetch_factor", 2))
+                    if loader_safe_mode:
+                        train_loader = self._create_vocoder_loader(
+                            entries=train_entries,
+                            dataset_dir=dataset_dir,
+                            stats=stats,
+                            max_frames=int(config["max_frames"]),
+                            batch_size=int(config["batch_size"]),
+                            num_workers=active_worker_count,
+                            prefetch_factor=active_prefetch_factor,
+                            random_crop=True,
+                            shuffle=True,
+                        )
+                        val_loader = self._create_vocoder_loader(
+                            entries=val_entries,
+                            dataset_dir=dataset_dir,
+                            stats=stats,
+                            max_frames=int(config["max_frames"]),
+                            batch_size=int(config["batch_size"]),
+                            num_workers=active_worker_count,
+                            prefetch_factor=active_prefetch_factor,
+                            random_crop=False,
+                            shuffle=False,
+                        )
+                    for batch in train_loader:
+                        if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+                            stopped_early = True
+                            break
+                        batch = {key: value.to(device) for key, value in batch.items()}
+                        real_audio = _mask_audio_by_lengths(batch["audio"], batch["sample_lengths"])
+                        autocast_context = (
+                            torch.autocast(device_type="cuda", dtype=autocast_dtype)
+                            if device.type == "cuda" and precision_mode in {"bf16", "fp16"}
+                            else nullcontext()
+                        )
+
+                        for parameter in discriminator.parameters():
+                            parameter.requires_grad_(True)
+                        optimizer_d.zero_grad(set_to_none=True)
+                        with autocast_context:
+                            fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
+                            discriminator_loss = self._vocoder_discriminator_hinge_loss(
+                                discriminator,
+                                real_audio=real_audio,
+                                fake_audio=fake_audio,
+                            )
+                        if use_grad_scaler:
+                            scaler.scale(discriminator_loss).backward()
+                            scaler.step(optimizer_d)
+                            scaler.update()
+                        else:
+                            discriminator_loss.backward()
+                            optimizer_d.step()
+
+                        for parameter in discriminator.parameters():
+                            parameter.requires_grad_(False)
+                        optimizer_g.zero_grad(set_to_none=True)
+                        with autocast_context:
+                            fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
+                            wave_loss = self._masked_wave_l1_loss(fake_audio, real_audio, batch["sample_lengths"])
+                            stft_loss = self._multi_resolution_wave_stft_loss(fake_audio, real_audio, batch["sample_lengths"])
+                            adv_loss, feature_matching_loss = self._vocoder_generator_losses(
+                                discriminator,
+                                real_audio=real_audio,
+                                fake_audio=fake_audio,
+                            )
+                            generator_total = (
+                                wave_loss
+                                + (0.8 * stft_loss)
+                                + (0.18 * adv_loss)
+                                + (0.32 * feature_matching_loss)
+                            )
+                        if use_grad_scaler:
+                            scaler.scale(generator_total).backward()
+                            scaler.step(optimizer_g)
+                            scaler.update()
+                        else:
+                            generator_total.backward()
+                            optimizer_g.step()
+                        for parameter in discriminator.parameters():
+                            parameter.requires_grad_(True)
+
+                        train_sums["generator_total"] += float(generator_total.detach().cpu().item())
+                        train_sums["wave"] += float(wave_loss.detach().cpu().item())
+                        train_sums["stft"] += float(stft_loss.detach().cpu().item())
+                        train_sums["adv"] += float(adv_loss.detach().cpu().item())
+                        train_sums["feature_matching"] += float(feature_matching_loss.detach().cpu().item())
+                        train_sums["discriminator"] += float(discriminator_loss.detach().cpu().item())
+                        train_batches += 1
+                        train_samples += int(batch["sample_lengths"].shape[0])
+
+                    generator.eval()
+                    discriminator.eval()
+                    val_sums = {
+                        "generator_total": 0.0,
+                        "wave": 0.0,
+                        "stft": 0.0,
+                    }
+                    val_batches = 0
+                    with torch.no_grad():
+                        for batch in val_loader:
+                            batch = {key: value.to(device) for key, value in batch.items()}
+                            real_audio = _mask_audio_by_lengths(batch["audio"], batch["sample_lengths"])
+                            fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
+                            wave_loss = self._masked_wave_l1_loss(fake_audio, real_audio, batch["sample_lengths"])
+                            stft_loss = self._multi_resolution_wave_stft_loss(fake_audio, real_audio, batch["sample_lengths"])
+                            generator_total = wave_loss + (0.8 * stft_loss)
+                            val_sums["generator_total"] += float(generator_total.detach().cpu().item())
+                            val_sums["wave"] += float(wave_loss.detach().cpu().item())
+                            val_sums["stft"] += float(stft_loss.detach().cpu().item())
+                            val_batches += 1
                     break
-                batch = {key: value.to(device) for key, value in batch.items()}
-                real_audio = _mask_audio_by_lengths(batch["audio"], batch["sample_lengths"])
-                autocast_context = (
-                    torch.autocast(device_type="cuda", dtype=autocast_dtype)
-                    if device.type == "cuda" and precision_mode in {"bf16", "fp16"}
-                    else nullcontext()
-                )
-
-                for parameter in discriminator.parameters():
-                    parameter.requires_grad_(True)
-                optimizer_d.zero_grad(set_to_none=True)
-                with autocast_context:
-                    fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
-                    discriminator_loss = self._vocoder_discriminator_hinge_loss(
-                        discriminator,
-                        real_audio=real_audio,
-                        fake_audio=fake_audio,
+                except RuntimeError as exc:
+                    if (not self._is_loader_runtime_error(exc)) or loader_safe_mode:
+                        raise
+                    loader_safe_mode = True
+                    update_status(
+                        "guided-vocoder-train",
+                        "Waveform loader became unstable, retrying in safe mode...",
+                        "Switching to single-process data loading so training can continue uninterrupted.",
+                        84,
                     )
-                if use_grad_scaler:
-                    scaler.scale(discriminator_loss).backward()
-                    scaler.step(optimizer_d)
-                    scaler.update()
-                else:
-                    discriminator_loss.backward()
-                    optimizer_d.step()
-
-                for parameter in discriminator.parameters():
-                    parameter.requires_grad_(False)
-                optimizer_g.zero_grad(set_to_none=True)
-                with autocast_context:
-                    fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
-                    wave_loss = self._masked_wave_l1_loss(fake_audio, real_audio, batch["sample_lengths"])
-                    stft_loss = self._multi_resolution_wave_stft_loss(fake_audio, real_audio, batch["sample_lengths"])
-                    adv_loss, feature_matching_loss = self._vocoder_generator_losses(
-                        discriminator,
-                        real_audio=real_audio,
-                        fake_audio=fake_audio,
-                    )
-                    generator_total = (
-                        wave_loss
-                        + (0.8 * stft_loss)
-                        + (0.18 * adv_loss)
-                        + (0.32 * feature_matching_loss)
-                    )
-                if use_grad_scaler:
-                    scaler.scale(generator_total).backward()
-                    scaler.step(optimizer_g)
-                    scaler.update()
-                else:
-                    generator_total.backward()
-                    optimizer_g.step()
-                for parameter in discriminator.parameters():
-                    parameter.requires_grad_(True)
-
-                train_sums["generator_total"] += float(generator_total.detach().cpu().item())
-                train_sums["wave"] += float(wave_loss.detach().cpu().item())
-                train_sums["stft"] += float(stft_loss.detach().cpu().item())
-                train_sums["adv"] += float(adv_loss.detach().cpu().item())
-                train_sums["feature_matching"] += float(feature_matching_loss.detach().cpu().item())
-                train_sums["discriminator"] += float(discriminator_loss.detach().cpu().item())
-                train_batches += 1
-                train_samples += int(batch["sample_lengths"].shape[0])
-
-            generator.eval()
-            discriminator.eval()
-            val_sums = {
-                "generator_total": 0.0,
-                "wave": 0.0,
-                "stft": 0.0,
-            }
-            val_batches = 0
-            with torch.no_grad():
-                for batch in val_loader:
-                    batch = {key: value.to(device) for key, value in batch.items()}
-                    real_audio = _mask_audio_by_lengths(batch["audio"], batch["sample_lengths"])
-                    fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
-                    wave_loss = self._masked_wave_l1_loss(fake_audio, real_audio, batch["sample_lengths"])
-                    stft_loss = self._multi_resolution_wave_stft_loss(fake_audio, real_audio, batch["sample_lengths"])
-                    generator_total = wave_loss + (0.8 * stft_loss)
-                    val_sums["generator_total"] += float(generator_total.detach().cpu().item())
-                    val_sums["wave"] += float(wave_loss.detach().cpu().item())
-                    val_sums["stft"] += float(stft_loss.detach().cpu().item())
-                    val_batches += 1
+                    try:
+                        if device.type == "cuda":
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
 
             train_total = train_sums["generator_total"] / max(train_batches, 1)
             val_total = val_sums["generator_total"] / max(val_batches, 1)
@@ -4629,6 +4688,7 @@ class GuidedSVSManager:
             f"{'compiled' if compiled_model else 'eager'} | "
             f"frames {max_frames} | workers {num_workers}"
         )
+        loader_safe_mode = False
 
         update_status(
             "guided-svs-train",
@@ -4651,164 +4711,206 @@ class GuidedSVSManager:
                 epoch=epoch,
                 total_epochs=max(total_epochs, 1),
             )
-            train_loader = self._create_loader(
-                entries=active_train_entries,
-                dataset_dir=dataset_dir,
-                stats=stats,
-                max_frames=max_frames,
-                batch_size=batch_size,
-                num_workers=num_workers,
-                prefetch_factor=prefetch_factor,
-                random_crop=True,
-                shuffle=True,
-            )
-            model.train()
-            train_loss_sums = {
-                "total": 0.0,
-                "mel": 0.0,
-                "stft": 0.0,
-                "phase": 0.0,
-                "f0": 0.0,
-                "delta_mel": 0.0,
-                "delta_f0": 0.0,
-                "vuv": 0.0,
-                "phones": 0.0,
-                "voice": 0.0,
-                "prototype": 0.0,
-                "silence": 0.0,
-            }
-            train_metric_counts = {
-                "phone_correct": 0.0,
-                "phone_total": 0.0,
-                "lyric_phone_correct": 0.0,
-                "lyric_phone_total": 0.0,
-                "vuv_correct": 0.0,
-                "vuv_total": 0.0,
-            }
-            train_batches = 0
-            train_frame_count = 0
-            train_sample_count = 0
-            epoch_started = time.time()
-            for batch in train_loader:
-                if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
-                    stopped_early = True
-                    break
-                batch = {key: value.to(device) for key, value in batch.items()}
-                optimizer.zero_grad(set_to_none=True)
-                autocast_context = (
-                    torch.autocast(device_type="cuda", dtype=autocast_dtype)
-                    if device.type == "cuda" and precision_mode in {"bf16", "fp16"}
-                    else nullcontext()
-                )
-                with autocast_context:
-                    outputs = self._predict_outputs(
-                        model,
-                        guide_mel=batch["guide_mel"],
-                        phone_ids=batch["phone_ids"],
-                        log_f0=batch["log_f0"],
-                        vuv=batch["vuv"],
-                        energy=batch["energy"],
-                        lengths=batch["lengths"],
-                        voice_prototype=batch["voice_prototype"],
-                        lyric_mask=batch["lyric_mask"],
+            while True:
+                active_worker_count = 0 if loader_safe_mode else num_workers
+                active_prefetch_factor = 2 if loader_safe_mode else prefetch_factor
+                if loader_safe_mode:
+                    update_status(
+                        "guided-svs-train",
+                        "Training the paired voice-builder regenerator...",
+                        "Data loading safe mode is active after a loader fault. Training is continuing with single-process loading for stability.",
+                        6,
                     )
-                    loss_terms = self._compute_loss_terms(
-                        outputs=outputs,
-                        batch=batch,
-                        loss_weights=dict(config.get("loss_weights", {})),
+                train_loader = self._create_loader(
+                    entries=active_train_entries,
+                    dataset_dir=dataset_dir,
+                    stats=stats,
+                    max_frames=max_frames,
+                    batch_size=batch_size,
+                    num_workers=active_worker_count,
+                    prefetch_factor=active_prefetch_factor,
+                    random_crop=True,
+                    shuffle=True,
+                )
+                val_loader_epoch = (
+                    self._create_loader(
+                        entries=val_entries,
+                        dataset_dir=dataset_dir,
+                        stats=stats,
+                        max_frames=max_frames,
+                        batch_size=batch_size,
+                        num_workers=active_worker_count,
+                        prefetch_factor=active_prefetch_factor,
+                        random_crop=False,
+                        shuffle=False,
                     )
-                    loss = loss_terms["total"]
-                if use_grad_scaler:
-                    scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
-                else:
-                    loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                if use_grad_scaler:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.step()
-                for loss_name in train_loss_sums:
-                    train_loss_sums[loss_name] += float(loss_terms[loss_name].detach().cpu().item())
-                phone_counts = self._phone_accuracy_counts(
-                    outputs["phone_logits"],
-                    batch["phone_ids"],
-                    batch["lengths"],
-                    batch["lyric_mask"],
+                    if loader_safe_mode
+                    else val_loader
                 )
-                vuv_counts = self._vuv_accuracy_counts(
-                    outputs["target_vuv_logits"],
-                    batch["target_vuv"],
-                    batch["lengths"],
-                )
-                for metric_name, metric_value in {**phone_counts, **vuv_counts}.items():
-                    train_metric_counts[metric_name] += float(metric_value)
-                train_batches += 1
-                train_frame_count += int(batch["lengths"].sum().detach().cpu().item())
-                train_sample_count += int(batch["lengths"].shape[0])
+                model.train()
+                train_loss_sums = {
+                    "total": 0.0,
+                    "mel": 0.0,
+                    "stft": 0.0,
+                    "phase": 0.0,
+                    "f0": 0.0,
+                    "delta_mel": 0.0,
+                    "delta_f0": 0.0,
+                    "vuv": 0.0,
+                    "phones": 0.0,
+                    "voice": 0.0,
+                    "prototype": 0.0,
+                    "silence": 0.0,
+                }
+                train_metric_counts = {
+                    "phone_correct": 0.0,
+                    "phone_total": 0.0,
+                    "lyric_phone_correct": 0.0,
+                    "lyric_phone_total": 0.0,
+                    "vuv_correct": 0.0,
+                    "vuv_total": 0.0,
+                }
+                train_batches = 0
+                train_frame_count = 0
+                train_sample_count = 0
+                epoch_started = time.time()
+                try:
+                    for batch in train_loader:
+                        if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+                            stopped_early = True
+                            break
+                        batch = {key: value.to(device) for key, value in batch.items()}
+                        optimizer.zero_grad(set_to_none=True)
+                        autocast_context = (
+                            torch.autocast(device_type="cuda", dtype=autocast_dtype)
+                            if device.type == "cuda" and precision_mode in {"bf16", "fp16"}
+                            else nullcontext()
+                        )
+                        with autocast_context:
+                            outputs = self._predict_outputs(
+                                model,
+                                guide_mel=batch["guide_mel"],
+                                phone_ids=batch["phone_ids"],
+                                log_f0=batch["log_f0"],
+                                vuv=batch["vuv"],
+                                energy=batch["energy"],
+                                lengths=batch["lengths"],
+                                voice_prototype=batch["voice_prototype"],
+                                lyric_mask=batch["lyric_mask"],
+                            )
+                            loss_terms = self._compute_loss_terms(
+                                outputs=outputs,
+                                batch=batch,
+                                loss_weights=dict(config.get("loss_weights", {})),
+                            )
+                            loss = loss_terms["total"]
+                        if use_grad_scaler:
+                            scaler.scale(loss).backward()
+                            scaler.unscale_(optimizer)
+                        else:
+                            loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        if use_grad_scaler:
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
+                            optimizer.step()
+                        for loss_name in train_loss_sums:
+                            train_loss_sums[loss_name] += float(loss_terms[loss_name].detach().cpu().item())
+                        phone_counts = self._phone_accuracy_counts(
+                            outputs["phone_logits"],
+                            batch["phone_ids"],
+                            batch["lengths"],
+                            batch["lyric_mask"],
+                        )
+                        vuv_counts = self._vuv_accuracy_counts(
+                            outputs["target_vuv_logits"],
+                            batch["target_vuv"],
+                            batch["lengths"],
+                        )
+                        for metric_name, metric_value in {**phone_counts, **vuv_counts}.items():
+                            train_metric_counts[metric_name] += float(metric_value)
+                        train_batches += 1
+                        train_frame_count += int(batch["lengths"].sum().detach().cpu().item())
+                        train_sample_count += int(batch["lengths"].shape[0])
 
-            model.eval()
-            val_loss_sums = {
-                "total": 0.0,
-                "mel": 0.0,
-                "stft": 0.0,
-                "phase": 0.0,
-                "f0": 0.0,
-                "delta_mel": 0.0,
-                "delta_f0": 0.0,
-                "vuv": 0.0,
-                "phones": 0.0,
-                "voice": 0.0,
-                "prototype": 0.0,
-                "silence": 0.0,
-            }
-            val_metric_counts = {
-                "phone_correct": 0.0,
-                "phone_total": 0.0,
-                "lyric_phone_correct": 0.0,
-                "lyric_phone_total": 0.0,
-                "vuv_correct": 0.0,
-                "vuv_total": 0.0,
-            }
-            val_batches = 0
-            val_frame_count = 0
-            with torch.no_grad():
-                for batch in val_loader:
-                    batch = {key: value.to(device) for key, value in batch.items()}
-                    outputs = self._predict_outputs(
-                        model,
-                        guide_mel=batch["guide_mel"],
-                        phone_ids=batch["phone_ids"],
-                        log_f0=batch["log_f0"],
-                        vuv=batch["vuv"],
-                        energy=batch["energy"],
-                        lengths=batch["lengths"],
-                        voice_prototype=batch["voice_prototype"],
-                        lyric_mask=batch["lyric_mask"],
+                    model.eval()
+                    val_loss_sums = {
+                        "total": 0.0,
+                        "mel": 0.0,
+                        "stft": 0.0,
+                        "phase": 0.0,
+                        "f0": 0.0,
+                        "delta_mel": 0.0,
+                        "delta_f0": 0.0,
+                        "vuv": 0.0,
+                        "phones": 0.0,
+                        "voice": 0.0,
+                        "prototype": 0.0,
+                        "silence": 0.0,
+                    }
+                    val_metric_counts = {
+                        "phone_correct": 0.0,
+                        "phone_total": 0.0,
+                        "lyric_phone_correct": 0.0,
+                        "lyric_phone_total": 0.0,
+                        "vuv_correct": 0.0,
+                        "vuv_total": 0.0,
+                    }
+                    val_batches = 0
+                    val_frame_count = 0
+                    with torch.no_grad():
+                        for batch in val_loader_epoch:
+                            batch = {key: value.to(device) for key, value in batch.items()}
+                            outputs = self._predict_outputs(
+                                model,
+                                guide_mel=batch["guide_mel"],
+                                phone_ids=batch["phone_ids"],
+                                log_f0=batch["log_f0"],
+                                vuv=batch["vuv"],
+                                energy=batch["energy"],
+                                lengths=batch["lengths"],
+                                voice_prototype=batch["voice_prototype"],
+                                lyric_mask=batch["lyric_mask"],
+                            )
+                            loss_terms = self._compute_loss_terms(
+                                outputs=outputs,
+                                batch=batch,
+                                loss_weights=dict(config.get("loss_weights", {})),
+                            )
+                            for loss_name in val_loss_sums:
+                                val_loss_sums[loss_name] += float(loss_terms[loss_name].detach().cpu().item())
+                            phone_counts = self._phone_accuracy_counts(
+                                outputs["phone_logits"],
+                                batch["phone_ids"],
+                                batch["lengths"],
+                                batch["lyric_mask"],
+                            )
+                            vuv_counts = self._vuv_accuracy_counts(
+                                outputs["target_vuv_logits"],
+                                batch["target_vuv"],
+                                batch["lengths"],
+                            )
+                            for metric_name, metric_value in {**phone_counts, **vuv_counts}.items():
+                                val_metric_counts[metric_name] += float(metric_value)
+                            val_batches += 1
+                            val_frame_count += int(batch["lengths"].sum().detach().cpu().item())
+                    break
+                except RuntimeError as exc:
+                    if (not self._is_loader_runtime_error(exc)) or loader_safe_mode:
+                        raise
+                    loader_safe_mode = True
+                    update_status(
+                        "guided-svs-train",
+                        "Training loader became unstable, retrying in safe mode...",
+                        "Switching to single-process data loading so the current run can continue uninterrupted on Vast.",
+                        6,
                     )
-                    loss_terms = self._compute_loss_terms(
-                        outputs=outputs,
-                        batch=batch,
-                        loss_weights=dict(config.get("loss_weights", {})),
-                    )
-                    for loss_name in val_loss_sums:
-                        val_loss_sums[loss_name] += float(loss_terms[loss_name].detach().cpu().item())
-                    phone_counts = self._phone_accuracy_counts(
-                        outputs["phone_logits"],
-                        batch["phone_ids"],
-                        batch["lengths"],
-                        batch["lyric_mask"],
-                    )
-                    vuv_counts = self._vuv_accuracy_counts(
-                        outputs["target_vuv_logits"],
-                        batch["target_vuv"],
-                        batch["lengths"],
-                    )
-                    for metric_name, metric_value in {**phone_counts, **vuv_counts}.items():
-                        val_metric_counts[metric_name] += float(metric_value)
-                    val_batches += 1
-                    val_frame_count += int(batch["lengths"].sum().detach().cpu().item())
+                    if device.type == "cuda":
+                        try:
+                            torch.cuda.empty_cache()
+                        except Exception:
+                            pass
 
             last_epoch = epoch
             train_loss = train_loss_sums["total"] / max(train_batches, 1)
