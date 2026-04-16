@@ -2876,7 +2876,11 @@ class GuidedSVSManager:
         loader_kwargs = {
             "batch_size": max(1, int(batch_size)),
             "num_workers": worker_count,
-            "pin_memory": bool(torch.cuda.is_available()),
+            # Vast/container CUDA environments can sporadically kill the
+            # DataLoader pin-memory helper thread mid-epoch. Disabling pinned
+            # memory here is slower in theory, but much more reliable for the
+            # long Persona training runs we care about.
+            "pin_memory": False,
             "collate_fn": collate_guided_svs,
         }
         if worker_count > 0:
@@ -2908,7 +2912,8 @@ class GuidedSVSManager:
         loader_kwargs = {
             "batch_size": max(1, int(batch_size)),
             "num_workers": worker_count,
-            "pin_memory": bool(torch.cuda.is_available()),
+            # Keep the waveform/vocoder phase on the same safer loader path.
+            "pin_memory": False,
             "collate_fn": collate_vocoder_slices,
         }
         if worker_count > 0:
