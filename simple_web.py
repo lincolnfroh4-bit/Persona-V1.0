@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 import json
 import mimetypes
 import os
@@ -799,6 +800,79 @@ generate_jobs_lock = threading.Lock()
 albums_lock = threading.Lock()
 app = FastAPI(title="Mangio Simple Web", docs_url=None, redoc_url=None)
 progress_log_lock = threading.Lock()
+persona_runtime_lock = threading.Lock()
+persona_runtime_state_lock = threading.Lock()
+persona_runtime_state: Dict[str, str] = {
+    "mode": "",
+    "job_id": "",
+    "label": "",
+}
+
+
+def _persona_runtime_label(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    labels = {
+        "training": "Persona training",
+        "master-conversion": "Persona conversion",
+        "generate": "Persona generation",
+    }
+    return labels.get(normalized, "Persona processing")
+
+
+def _get_persona_runtime_state() -> Dict[str, str | bool]:
+    with persona_runtime_state_lock:
+        mode = str(persona_runtime_state.get("mode", "") or "").strip().lower()
+        job_id = str(persona_runtime_state.get("job_id", "") or "").strip()
+        label = str(persona_runtime_state.get("label", "") or "").strip()
+    return {
+        "busy": bool(mode),
+        "mode": mode,
+        "job_id": job_id,
+        "label": label or _persona_runtime_label(mode),
+    }
+
+
+def _assert_persona_runtime_available(requested_label: str) -> None:
+    active = _get_persona_runtime_state()
+    if not bool(active.get("busy")):
+        return
+    active_label = str(active.get("label", "Persona processing"))
+    raise HTTPException(
+        status_code=409,
+        detail=f"{active_label} is already running. Wait for it to finish before starting {requested_label}.",
+    )
+
+
+@contextmanager
+def _persona_runtime_session(mode: str, job_id: str):
+    label = _persona_runtime_label(mode)
+    if not persona_runtime_lock.acquire(blocking=False):
+        active = _get_persona_runtime_state()
+        active_label = str(active.get("label", "Persona processing"))
+        raise RuntimeError(
+            f"{active_label} is already running. Wait for it to finish before starting {label.lower()}."
+        )
+    with persona_runtime_state_lock:
+        persona_runtime_state["mode"] = str(mode or "").strip().lower()
+        persona_runtime_state["job_id"] = str(job_id or "").strip()
+        persona_runtime_state["label"] = label
+    try:
+        yield
+    finally:
+        with persona_runtime_state_lock:
+            persona_runtime_state["mode"] = ""
+            persona_runtime_state["job_id"] = ""
+            persona_runtime_state["label"] = ""
+        try:
+            persona_runtime_lock.release()
+        except RuntimeError:
+            pass
+
+
+def _start_persona_runtime(mode: str, job_id: str):
+    session = _persona_runtime_session(mode, job_id)
+    session.__enter__()
+    return session
 progress_log_cache: Dict[str, tuple[str, int, str]] = {}
 
 app.mount("/static", StaticFiles(directory=str(STATIC_ROOT)), name="static")
@@ -2369,101 +2443,102 @@ def start_master_conversion_job(
     settings: Dict[str, object],
 ) -> None:
     try:
-        set_master_conversion_job_state(
-            job_id,
-            status="running",
-            stage="analysis",
-            progress=6,
-            message="Preparing the full song and reading the lyric guide.",
-        )
-
-        job_root = MASTER_CONVERSION_ROOT / job_id
-        output_dir = job_root / "outputs"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        quality_preset = str(settings.get("quality_preset", "balanced") or "balanced")
-        master_profile = str(settings.get("master_profile", "studio") or "studio")
-        preferred_pipeline = "off"
-        blend_mode = str(settings.get("output_mode", "single") or "single").strip().lower() == "blend"
-        secondary_model_name = str(settings.get("secondary_model_name", "") or "").strip() if blend_mode else ""
-        blend_percentage = max(0, min(int(settings.get("blend_percentage", 50) or 50), 100))
-
-        def progress_stage(progress_value: float) -> str:
-            progress_number = float(progress_value)
-            if progress_number < 34:
-                return "source analysis"
-            if progress_number < 64:
-                return "voice conversion"
-            if progress_number < 94:
-                return "pronunciation repair"
-            return "final cleanup"
-
-        metadata = master_conversion_engine.run(
-            model_name=model_name,
-            input_path=source_path,
-            lyrics=str(settings["lyrics"]),
-            output_dir=output_dir,
-            settings=settings,
-            quality_preset=quality_preset,
-            master_profile=master_profile,
-            preferred_pipeline=preferred_pipeline,
-            candidate_strength=1,
-            output_format=output_format,
-            secondary_model_name=secondary_model_name,
-            blend_percentage=blend_percentage,
-            cancel_event=threading.Event(),
-            update_status=lambda payload: set_master_conversion_job_state(
+        with _persona_runtime_session("master-conversion", job_id):
+            set_master_conversion_job_state(
                 job_id,
                 status="running",
-                stage=progress_stage(float(payload.get("progress", 0))),
-                progress=int(payload.get("progress", 0)),
-                message=str(payload.get("message", "")) or "Master Conversion is running.",
-                best_similarity_score=float(payload.get("best_similarity_score", 0.0)),
-                best_word_report=str(payload.get("best_word_report", "")),
-                best_letter_report=str(payload.get("best_letter_report", "")),
-                repair_attempts=int(payload.get("repair_attempts", 0)),
-                repaired_word_count=int(payload.get("repaired_word_count", 0)),
-            ),
-        )
+                stage="analysis",
+                progress=6,
+                message="Preparing the full song and reading the lyric guide.",
+            )
 
-        zip_path = job_root / f"{job_id}.zip"
-        create_zip(zip_path, output_dir)
+            job_root = MASTER_CONVERSION_ROOT / job_id
+            output_dir = job_root / "outputs"
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-        def artifact_url(file_path: Path) -> str:
-            relative = file_path.relative_to(REPO_ROOT / "audio-outputs").as_posix()
-            return f"/downloads/{relative}"
+            quality_preset = str(settings.get("quality_preset", "balanced") or "balanced")
+            master_profile = str(settings.get("master_profile", "studio") or "studio")
+            preferred_pipeline = "off"
+            blend_mode = str(settings.get("output_mode", "single") or "single").strip().lower() == "blend"
+            secondary_model_name = str(settings.get("secondary_model_name", "") or "").strip() if blend_mode else ""
+            blend_percentage = max(0, min(int(settings.get("blend_percentage", 50) or 50), 100))
 
-        set_master_conversion_job_state(
-            job_id,
-            status="completed",
-            stage="done",
-            progress=100,
-            message="Master Conversion finished. Review the prepared source, repaired vocal, and final output below.",
-            sample_rate=int(metadata["sample_rate"]),
-            best_similarity_score=float(metadata.get("best_similarity_score", 0.0)),
-            best_word_report=str(metadata.get("best_word_report", "")),
-            best_letter_report=str(metadata.get("best_letter_report", "")),
-            repair_attempts=int(metadata.get("repair_attempts", 0)),
-            repaired_word_count=int(metadata.get("repaired_word_count", 0)),
-            candidate_reports=list(metadata.get("candidate_reports", [])),
-            phrase_choices=list(metadata.get("phrase_choices", [])),
-            final_url=artifact_url(Path(str(metadata["output_path"]))),
-            final_download_name=Path(str(metadata["output_path"])).name,
-            reconstructed_lead_url=artifact_url(Path(str(metadata["reconstructed_lead_path"]))),
-            reconstructed_lead_download_name=Path(str(metadata["reconstructed_lead_path"])).name,
-            reconstructed_removed_url=artifact_url(Path(str(metadata["reconstructed_removed_path"]))),
-            reconstructed_removed_download_name=Path(str(metadata["reconstructed_removed_path"])).name,
-            raw_conversion_url=artifact_url(Path(str(metadata["raw_conversion_path"]))),
-            raw_conversion_download_name=Path(str(metadata["raw_conversion_path"])).name,
-            repaired_url=artifact_url(Path(str(metadata["repaired_path"]))),
-            repaired_download_name=Path(str(metadata["repaired_path"])).name,
-            final_removed_url=artifact_url(Path(str(metadata["final_removed_path"]))),
-            final_removed_download_name=Path(str(metadata["final_removed_path"])).name,
-            metadata_url=artifact_url(Path(str(metadata["metadata_path"]))),
-            metadata_download_name=Path(str(metadata["metadata_path"])).name,
-            zip_url=artifact_url(zip_path),
-            timings=dict(metadata.get("timings", {})),
-        )
+            def progress_stage(progress_value: float) -> str:
+                progress_number = float(progress_value)
+                if progress_number < 34:
+                    return "source analysis"
+                if progress_number < 64:
+                    return "voice conversion"
+                if progress_number < 94:
+                    return "pronunciation repair"
+                return "final cleanup"
+
+            metadata = master_conversion_engine.run(
+                model_name=model_name,
+                input_path=source_path,
+                lyrics=str(settings["lyrics"]),
+                output_dir=output_dir,
+                settings=settings,
+                quality_preset=quality_preset,
+                master_profile=master_profile,
+                preferred_pipeline=preferred_pipeline,
+                candidate_strength=1,
+                output_format=output_format,
+                secondary_model_name=secondary_model_name,
+                blend_percentage=blend_percentage,
+                cancel_event=threading.Event(),
+                update_status=lambda payload: set_master_conversion_job_state(
+                    job_id,
+                    status="running",
+                    stage=progress_stage(float(payload.get("progress", 0))),
+                    progress=int(payload.get("progress", 0)),
+                    message=str(payload.get("message", "")) or "Master Conversion is running.",
+                    best_similarity_score=float(payload.get("best_similarity_score", 0.0)),
+                    best_word_report=str(payload.get("best_word_report", "")),
+                    best_letter_report=str(payload.get("best_letter_report", "")),
+                    repair_attempts=int(payload.get("repair_attempts", 0)),
+                    repaired_word_count=int(payload.get("repaired_word_count", 0)),
+                ),
+            )
+
+            zip_path = job_root / f"{job_id}.zip"
+            create_zip(zip_path, output_dir)
+
+            def artifact_url(file_path: Path) -> str:
+                relative = file_path.relative_to(REPO_ROOT / "audio-outputs").as_posix()
+                return f"/downloads/{relative}"
+
+            set_master_conversion_job_state(
+                job_id,
+                status="completed",
+                stage="done",
+                progress=100,
+                message="Master Conversion finished. Review the prepared source, repaired vocal, and final output below.",
+                sample_rate=int(metadata["sample_rate"]),
+                best_similarity_score=float(metadata.get("best_similarity_score", 0.0)),
+                best_word_report=str(metadata.get("best_word_report", "")),
+                best_letter_report=str(metadata.get("best_letter_report", "")),
+                repair_attempts=int(metadata.get("repair_attempts", 0)),
+                repaired_word_count=int(metadata.get("repaired_word_count", 0)),
+                candidate_reports=list(metadata.get("candidate_reports", [])),
+                phrase_choices=list(metadata.get("phrase_choices", [])),
+                final_url=artifact_url(Path(str(metadata["output_path"]))),
+                final_download_name=Path(str(metadata["output_path"])).name,
+                reconstructed_lead_url=artifact_url(Path(str(metadata["reconstructed_lead_path"]))),
+                reconstructed_lead_download_name=Path(str(metadata["reconstructed_lead_path"])).name,
+                reconstructed_removed_url=artifact_url(Path(str(metadata["reconstructed_removed_path"]))),
+                reconstructed_removed_download_name=Path(str(metadata["reconstructed_removed_path"])).name,
+                raw_conversion_url=artifact_url(Path(str(metadata["raw_conversion_path"]))),
+                raw_conversion_download_name=Path(str(metadata["raw_conversion_path"])).name,
+                repaired_url=artifact_url(Path(str(metadata["repaired_path"]))),
+                repaired_download_name=Path(str(metadata["repaired_path"])).name,
+                final_removed_url=artifact_url(Path(str(metadata["final_removed_path"]))),
+                final_removed_download_name=Path(str(metadata["final_removed_path"])).name,
+                metadata_url=artifact_url(Path(str(metadata["metadata_path"]))),
+                metadata_download_name=Path(str(metadata["metadata_path"])).name,
+                zip_url=artifact_url(zip_path),
+                timings=dict(metadata.get("timings", {})),
+            )
     except Exception:
         set_master_conversion_job_state(
             job_id,
@@ -2480,7 +2555,9 @@ def start_generate_job(
     guide_path: Path,
     settings: Dict[str, object],
 ) -> None:
+    persona_runtime_session = None
     try:
+        persona_runtime_session = _start_persona_runtime("generate", job_id)
         set_generate_job_state(
             job_id,
             status="running",
@@ -2740,6 +2817,9 @@ def start_generate_job(
             message="Generate stopped because something went wrong.",
             error=traceback.format_exc(),
         )
+    finally:
+        if persona_runtime_session is not None:
+            persona_runtime_session.__exit__(None, None, None)
 
 
 def start_training_job(
@@ -2751,6 +2831,7 @@ def start_training_job(
     job_root: Path,
     settings: Dict[str, object],
 ) -> None:
+    persona_runtime_session = None
     with training_stop_events_lock:
         cancel_event = training_stop_events.setdefault(job_id, threading.Event())
     requested_output_mode = str(
@@ -2779,6 +2860,7 @@ def start_training_job(
         end = 94 if output_mode == "pipa-logic-only" else 66
         return int(round(start + ((normalized / 100.0) * (end - start))))
     try:
+        persona_runtime_session = _start_persona_runtime("training", job_id)
         set_training_job_state(
             job_id,
             status="running",
@@ -3030,6 +3112,8 @@ def start_training_job(
             error=traceback.format_exc(),
         )
     finally:
+        if persona_runtime_session is not None:
+            persona_runtime_session.__exit__(None, None, None)
         with training_stop_events_lock:
             training_stop_events.pop(job_id, None)
 
@@ -4543,6 +4627,7 @@ async def create_master_conversion_job(
     output_format: str = Form("wav"),
     source_file: UploadFile = File(...),
 ) -> Dict[str, object]:
+    _assert_persona_runtime_available("a Persona conversion")
     available_models = get_available_model_names()
     if not available_models:
         raise HTTPException(
@@ -4660,6 +4745,7 @@ async def create_generate_job(
     preprocess_strength: int = Form(9),
     guide_file: UploadFile = File(...),
 ) -> Dict[str, object]:
+    _assert_persona_runtime_available("Persona generation")
     available_models = get_available_model_names()
     if not available_models:
         raise HTTPException(
@@ -5440,6 +5526,7 @@ async def create_training_job(
     transcript_files: Optional[List[UploadFile]] = File(None),
     plan_files: Optional[List[UploadFile]] = File(None),
 ) -> Dict[str, object]:
+    _assert_persona_runtime_available("Persona training")
     transcript_files = list(transcript_files or [])
     plan_files = list(plan_files or [])
     if not files:
