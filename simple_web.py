@@ -2761,6 +2761,8 @@ def start_training_job(
         if requested_output_mode in {"persona-v1", "pipa-logic-only"}
         else requested_output_mode
     )
+    resume_selection_name = str(settings.get("resume_selection_name", "") or "").strip()
+    start_phase = str(settings.get("start_phase", "auto") or "auto").strip()
     guided_total_epochs = max(
         1,
         int(
@@ -2800,6 +2802,36 @@ def start_training_job(
             for path in sorted(plan_dir.iterdir())
             if path.is_file()
         ]
+        resume_bundle = (
+            backend.pipa_store.resolve_bundle(resume_selection_name)
+            if resume_selection_name
+            else None
+        )
+        if resume_selection_name and resume_bundle is None:
+            raise FileNotFoundError(
+                f"Resume package '{resume_selection_name}' was not found on this instance."
+            )
+        resume_checkpoint_path = None
+        resume_report_path = None
+        if resume_bundle is not None:
+            latest_checkpoint = Path(
+                str(
+                    resume_bundle.get("guided_regeneration_latest_path", "")
+                    or resume_bundle.get("guided_regeneration_path", "")
+                    or ""
+                )
+            )
+            if latest_checkpoint.exists():
+                resume_checkpoint_path = latest_checkpoint
+            else:
+                raise FileNotFoundError(
+                    f"Resume checkpoint for '{resume_selection_name}' is missing."
+                )
+            raw_resume_report = str(resume_bundle.get("guided_regeneration_report_path", "") or "").strip()
+            if raw_resume_report:
+                candidate_report = Path(raw_resume_report)
+                if candidate_report.exists():
+                    resume_report_path = candidate_report
         pipa_build_dir = job_root / "pipa-build"
         reset_directory(pipa_build_dir)
         prep_metadata = backend.pipa_store.prepare_training_assets(
@@ -2834,6 +2866,9 @@ def start_training_job(
                 progress=map_guided_training_progress(progress),
             ),
             cancel_event=cancel_event,
+            resume_checkpoint_path=resume_checkpoint_path,
+            resume_report_path=resume_report_path,
+            start_phase=start_phase,
         )
 
         guided_dataset_features_dir = Path(str(prep_metadata["guided_svs_dataset_dir"])) / "features"
@@ -5399,6 +5434,8 @@ async def create_training_job(
     save_every_epoch: int = Form(25),
     batch_size: int = Form(4),
     crepe_hop_length: int = Form(128),
+    resume_selection_name: str = Form(""),
+    start_phase: str = Form("auto"),
     files: List[UploadFile] = File(...),
     transcript_files: Optional[List[UploadFile]] = File(None),
     plan_files: Optional[List[UploadFile]] = File(None),
@@ -5427,6 +5464,14 @@ async def create_training_job(
         raise HTTPException(status_code=400, detail="Unsupported training length mode.")
     if alignment_tolerance not in {"forgiving", "balanced", "strict"}:
         raise HTTPException(status_code=400, detail="Unsupported transcript alignment tolerance.")
+    start_phase = str(start_phase or "auto").strip().lower()
+    start_phase = {
+        "warmup": "warm-up",
+        "bridge": "curriculum-bridge",
+        "full": "full-diversity",
+    }.get(start_phase, start_phase)
+    if start_phase not in {"auto", "warm-up", "curriculum-bridge", "full-diversity"}:
+        raise HTTPException(status_code=400, detail="Unsupported training start phase.")
 
     requested_total_epochs = max(1, min(int(total_epochs), 10000))
     total_epochs = requested_total_epochs
@@ -5500,6 +5545,8 @@ async def create_training_job(
         "crepe_hop_length": crepe_hop_length,
         "build_index": bool(build_index),
         "alignment_tolerance": alignment_tolerance,
+        "resume_selection_name": str(resume_selection_name or "").strip(),
+        "start_phase": start_phase,
     }
     worker = threading.Thread(
         target=start_training_job,

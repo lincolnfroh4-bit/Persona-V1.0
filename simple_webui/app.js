@@ -301,6 +301,9 @@ const trainingOutputMode = document.getElementById("trainingOutputMode");
 const trainingPackageDownloadSelect = document.getElementById("trainingPackageDownloadSelect");
 const downloadTrainingPackageButton = document.getElementById("downloadTrainingPackageButton");
 const trainingPackageDownloadSummary = document.getElementById("trainingPackageDownloadSummary");
+const trainingResumePackageSelect = document.getElementById("trainingResumePackageSelect");
+const trainingStartPhase = document.getElementById("trainingStartPhase");
+const trainingResumeSummary = document.getElementById("trainingResumeSummary");
 const trainingEpochMode = document.getElementById("trainingEpochMode");
 const trainingEpochModeSummary = document.getElementById("trainingEpochModeSummary");
 const trainingEpochs = document.getElementById("trainingEpochs");
@@ -2113,6 +2116,60 @@ function updateTrainingPackageDownloadSummary() {
     : "Pick a Persona package to download its full folder.";
 }
 
+function updateTrainingResumeSummary() {
+  if (!trainingResumeSummary) {
+    return;
+  }
+  const selectionName = trainingResumePackageSelect?.value || "";
+  const selected = (state.pipaPackages || []).find((entry) => entry.name === selectionName);
+  if (!selected) {
+    trainingResumeSummary.textContent =
+      "Start fresh, or pick a Persona package to continue from its latest saved checkpoint.";
+    return;
+  }
+  const bestEpoch = Number(selected.guided_regeneration_best_epoch || 0);
+  const lastEpoch = Number(selected.guided_regeneration_last_epoch || 0);
+  const bestTotal = Number(selected.guided_regeneration_best_val_total || 0);
+  const quality = selected.guided_regeneration_quality_summary
+    ? ` | ${selected.guided_regeneration_quality_summary}`
+    : "";
+  trainingResumeSummary.textContent =
+    `${selected.label || selected.name} will resume from its latest saved checkpoint. ` +
+    `Best epoch ${bestEpoch || "unknown"} | last epoch ${lastEpoch || "unknown"} | ` +
+    `best total ${bestTotal ? bestTotal.toFixed(4) : "unknown"}${quality}`;
+}
+
+function renderTrainingResumeOptions() {
+  if (!trainingResumePackageSelect) {
+    return;
+  }
+
+  const packages = Array.isArray(state.pipaPackages)
+    ? state.pipaPackages.filter((entry) => String(entry?.package_mode || "persona-v1") === "persona-v1")
+    : [];
+  const previousValue = trainingResumePackageSelect.value;
+  trainingResumePackageSelect.innerHTML = "";
+
+  const freshOption = document.createElement("option");
+  freshOption.value = "";
+  freshOption.textContent = "Start fresh (no saved package)";
+  trainingResumePackageSelect.appendChild(freshOption);
+
+  packages.forEach((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.name || "";
+    const bestEpoch = Number(entry.guided_regeneration_best_epoch || 0);
+    const lastEpoch = Number(entry.guided_regeneration_last_epoch || 0);
+    option.textContent = `${entry.label || entry.name || "Persona package"}${bestEpoch || lastEpoch ? ` (best ${bestEpoch || "?"}, last ${lastEpoch || "?"})` : ""}`;
+    trainingResumePackageSelect.appendChild(option);
+  });
+
+  trainingResumePackageSelect.value = packages.some((entry) => entry.name === previousValue)
+    ? previousValue
+    : "";
+  updateTrainingResumeSummary();
+}
+
 function downloadSelectedTrainingPackage() {
   if (!trainingPackageDownloadSelect || !trainingPackageDownloadSelect.value) {
     if (trainingPackageDownloadSummary) {
@@ -2202,6 +2259,7 @@ async function loadModels() {
   updateGenerateQualitySummary();
   updatePipaPackageSummary();
   renderTrainingPackageDownloads();
+  renderTrainingResumeOptions();
 }
 
 async function loadMasterConversionOptions() {
@@ -3690,6 +3748,8 @@ async function startTraining() {
   data.append("save_every_epoch", trainingSaveEvery.value || "25");
   data.append("batch_size", trainingBatchSize.value || "4");
   data.append("crepe_hop_length", trainingCrepeHopLength.value || "128");
+  data.append("resume_selection_name", trainingResumePackageSelect?.value || "");
+  data.append("start_phase", trainingStartPhase?.value || "auto");
   for (const file of state.trainingFiles) {
     data.append("files", file, file.name);
   }
@@ -4449,6 +4509,7 @@ bindIfPresent(trainingOutputMode, "change", syncTrainingRunModeUI);
 bindIfPresent(trainingEpochMode, "change", syncTrainingRunModeUI);
 bindIfPresent(trainingPackageDownloadSelect, "change", updateTrainingPackageDownloadSummary);
 bindIfPresent(downloadTrainingPackageButton, "click", downloadSelectedTrainingPackage);
+bindIfPresent(trainingResumePackageSelect, "change", updateTrainingResumeSummary);
 
 bindIfPresent(pitchPreset, "change", () => {
   customPitchField.classList.toggle("hidden", pitchPreset.value !== "custom");

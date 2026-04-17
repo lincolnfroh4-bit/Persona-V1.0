@@ -3508,6 +3508,9 @@ class GuidedSVSManager:
         entries: Sequence[Dict[str, object]],
         epoch: int,
         total_epochs: int,
+        start_phase: str = "auto",
+        warmup_end_epoch: int = 600,
+        bridge_end_epoch: int = 1800,
     ) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
         all_entries = [dict(entry) for entry in entries]
         if not all_entries:
@@ -3523,16 +3526,33 @@ class GuidedSVSManager:
                 -float(entry.get("alignment_score", 0.0)),
             ),
         )
-        progress = epoch / float(max(total_epochs, 1))
-        if progress <= 0.2:
+        normalized_phase = str(start_phase or "auto").strip().lower()
+        normalized_phase = {
+            "warmup": "warm-up",
+            "bridge": "curriculum-bridge",
+            "full": "full-diversity",
+        }.get(normalized_phase, normalized_phase)
+        if normalized_phase == "warm-up":
             fraction = 0.35
             phase_name = "warm-up"
-        elif progress <= 0.55:
+        elif normalized_phase == "curriculum-bridge":
             fraction = 0.7
             phase_name = "curriculum-bridge"
-        else:
+        elif normalized_phase == "full-diversity":
             fraction = 1.0
             phase_name = "full-diversity"
+        else:
+            effective_warmup_end = max(1, int(warmup_end_epoch))
+            effective_bridge_end = max(effective_warmup_end, int(bridge_end_epoch))
+            if epoch <= effective_warmup_end:
+                fraction = 0.35
+                phase_name = "warm-up"
+            elif epoch <= effective_bridge_end:
+                fraction = 0.7
+                phase_name = "curriculum-bridge"
+            else:
+                fraction = 1.0
+                phase_name = "full-diversity"
         keep_count = len(paired_entries) if fraction >= 0.999 else max(1, int(math.ceil(len(paired_entries) * fraction)))
         selected = identity_entries + paired_entries[:keep_count]
         if not selected:
@@ -3654,6 +3674,7 @@ class GuidedSVSManager:
         path: Path,
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         epoch: int,
         best_val_loss: float,
         config: Dict[str, object],
@@ -3667,6 +3688,7 @@ class GuidedSVSManager:
                 "config": dict(config),
                 "model_state": checkpoint_model.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
+                "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
             },
             path,
         )
@@ -3790,7 +3812,7 @@ class GuidedSVSManager:
         best_index = int(torch.argmax(candidate_score).detach().cpu().item())
         best_length = int(search_batch["lengths"][best_index].detach().cpu().item())
         return (
-            outputs["mel"][best_index, :best_length].detach().cpu().numpy().astype(np.float32, copy=False),
+            outputs["mel"][best_index, :best_length].detach().float().cpu().numpy().astype(np.float32, copy=False),
             {
                 "candidate_count": int(candidate_count),
                 "best_index": int(best_index),
@@ -4551,12 +4573,24 @@ class GuidedSVSManager:
         batch_size: int,
         update_status: Callable[[str, str, str, int], None],
         cancel_event: Optional[object] = None,
+        resume_checkpoint_path: Optional[Path] = None,
+        resume_report_path: Optional[Path] = None,
+        start_phase: str = "auto",
     ) -> Dict[str, object]:
         output_dir.mkdir(parents=True, exist_ok=True)
         hardware_profile = self._get_training_hardware_profile()
         max_frames = int(hardware_profile.get("max_frames", 320))
         num_workers = int(hardware_profile.get("num_workers", 0))
         prefetch_factor = int(hardware_profile.get("prefetch_factor", 2))
+        requested_run_epochs = max(1, int(total_epochs))
+        warmup_end_epoch = 600
+        bridge_end_epoch = 1800
+        normalized_start_phase = str(start_phase or "auto").strip().lower()
+        normalized_start_phase = {
+            "warmup": "warm-up",
+            "bridge": "curriculum-bridge",
+            "full": "full-diversity",
+        }.get(normalized_start_phase, normalized_start_phase)
         train_loader, val_loader, stats, train_entries, val_entries, filter_metadata = self._build_loaders(
             dataset_dir=dataset_dir,
             max_frames=max_frames,
@@ -4568,6 +4602,14 @@ class GuidedSVSManager:
         precision_mode = str(hardware_profile.get("precision_mode", "fp32"))
         autocast_dtype = torch.float32
         use_grad_scaler = False
+        resume_checkpoint: Dict[str, object] = {}
+        resume_epoch = 0
+        resolved_resume_checkpoint = Path(str(resume_checkpoint_path)) if resume_checkpoint_path else None
+        if resolved_resume_checkpoint is not None:
+            if not resolved_resume_checkpoint.exists():
+                raise FileNotFoundError(f"Resume checkpoint was not found: {resolved_resume_checkpoint}")
+            resume_checkpoint = torch.load(resolved_resume_checkpoint, map_location="cpu")
+            resume_epoch = max(0, int(resume_checkpoint.get("epoch", 0)))
         if device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
@@ -4589,7 +4631,7 @@ class GuidedSVSManager:
             elif precision_mode == "fp16":
                 autocast_dtype = torch.float16
                 use_grad_scaler = True
-        config = {
+        config: Dict[str, object] = {
             "sample_rate": SAMPLE_RATE,
             "hop_length": HOP_LENGTH,
             "n_fft": N_FFT,
@@ -4599,7 +4641,7 @@ class GuidedSVSManager:
             "voice_signature_bands": VOICE_SIGNATURE_BANDS,
             "max_frames": max_frames,
             "batch_size": int(batch_size),
-            "total_epochs": int(total_epochs),
+            "total_epochs": int(requested_run_epochs),
             "phone_tokens": list(PHONE_TOKENS),
             "num_workers": int(num_workers),
             "prefetch_factor": int(prefetch_factor),
@@ -4619,6 +4661,9 @@ class GuidedSVSManager:
                     {"name": "curriculum-bridge", "fraction": 0.7},
                     {"name": "full-diversity", "fraction": 1.0},
                 ],
+                "warmup_end_epoch": int(warmup_end_epoch),
+                "bridge_end_epoch": int(bridge_end_epoch),
+                "start_phase": normalized_start_phase,
             },
             "loss_weights": {
                 "mel": 1.0,
@@ -4634,6 +4679,32 @@ class GuidedSVSManager:
                 "silence": 0.24,
             },
         }
+        if resume_checkpoint:
+            checkpoint_config = dict(resume_checkpoint.get("config", {}))
+            merged_config = dict(checkpoint_config)
+            merged_config.update(
+                {
+                    "batch_size": int(batch_size),
+                    "total_epochs": int(requested_run_epochs),
+                    "num_workers": int(num_workers),
+                    "prefetch_factor": int(prefetch_factor),
+                    "gpu_memory_gb": float(hardware_profile.get("gpu_memory_gb", 0.0)),
+                    "precision_mode": precision_mode,
+                    "fused_optimizer": bool(hardware_profile.get("use_fused_adamw", False)),
+                    "pair_filtering": dict(filter_metadata),
+                }
+            )
+            merged_curriculum = dict(merged_config.get("curriculum", {}))
+            merged_curriculum.update(
+                {
+                    "enabled": True,
+                    "warmup_end_epoch": int(warmup_end_epoch),
+                    "bridge_end_epoch": int(bridge_end_epoch),
+                    "start_phase": normalized_start_phase,
+                }
+            )
+            merged_config["curriculum"] = merged_curriculum
+            config = merged_config
         model = self._instantiate_model(config).to(device)
         compiled_model = False
         if device.type == "cuda" and bool(hardware_profile.get("compile_model", False)) and hasattr(torch, "compile"):
@@ -4654,33 +4725,61 @@ class GuidedSVSManager:
         except TypeError:
             optimizer_kwargs.pop("fused", None)
             optimizer = torch.optim.AdamW(model.parameters(), **optimizer_kwargs)
-        warmup_epochs = max(4, int(round(max(total_epochs, 1) * 0.05)))
+        lr_warmup_epochs = max(4, min(120, int(round(max(requested_run_epochs, 1) * 0.05))))
+        if normalized_start_phase in {"curriculum-bridge", "full-diversity"} or resume_epoch >= warmup_end_epoch:
+            lr_warmup_epochs = 0
         min_lr_scale = 0.12
 
         def lr_lambda(epoch_index: int) -> float:
             epoch_number = epoch_index + 1
-            if epoch_number <= warmup_epochs:
-                return max(0.35, epoch_number / float(max(warmup_epochs, 1)))
-            progress = (epoch_number - warmup_epochs) / float(max(total_epochs - warmup_epochs, 1))
+            if lr_warmup_epochs > 0 and epoch_number <= lr_warmup_epochs:
+                return max(0.35, epoch_number / float(max(lr_warmup_epochs, 1)))
+            progress = (epoch_number - lr_warmup_epochs) / float(max(requested_run_epochs - lr_warmup_epochs, 1))
             cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
             return max(min_lr_scale, min_lr_scale + ((1.0 - min_lr_scale) * cosine))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         scaler = torch.cuda.amp.GradScaler(enabled=bool(device.type == "cuda" and use_grad_scaler))
+        resume_report_payload: Dict[str, object] = {}
+        resolved_resume_report = Path(str(resume_report_path)) if resume_report_path else None
+        if resolved_resume_report is not None and resolved_resume_report.exists():
+            try:
+                loaded_report = json.loads(resolved_resume_report.read_text(encoding="utf-8"))
+                if isinstance(loaded_report, dict):
+                    resume_report_payload = loaded_report
+            except Exception:
+                resume_report_payload = {}
         config_path = output_dir / "guided_regeneration_config.json"
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
         history: List[Dict[str, object]] = []
-        best_val_loss = float("inf")
-        best_val_mel = float("inf")
-        best_epoch = 0
-        best_phone_accuracy = 0.0
-        best_lyric_phone_accuracy = 0.0
-        best_vuv_accuracy = 0.0
+        if resolved_resume_checkpoint is not None:
+            resume_history_path = resolved_resume_checkpoint.parent / "guided_regeneration_history.json"
+            if resume_history_path.exists():
+                try:
+                    loaded_history = json.loads(resume_history_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded_history, list):
+                        history = [dict(entry) for entry in loaded_history if isinstance(entry, dict)]
+                except Exception:
+                    history = []
+        best_val_loss = float(resume_checkpoint.get("best_val_loss", resume_report_payload.get("best_val_total", float("inf"))))
+        best_val_mel = float(resume_report_payload.get("best_val_l1", best_val_loss if math.isfinite(best_val_loss) else float("inf")))
+        best_epoch = int(resume_report_payload.get("best_epoch", resume_epoch if resume_epoch > 0 else 0))
+        best_phone_accuracy = float(resume_report_payload.get("best_phone_accuracy", 0.0))
+        best_lyric_phone_accuracy = float(resume_report_payload.get("best_lyric_phone_accuracy", 0.0))
+        best_vuv_accuracy = float(resume_report_payload.get("best_vuv_accuracy", 0.0))
+        if resume_checkpoint:
+            model.load_state_dict(dict(resume_checkpoint.get("model_state", {})), strict=False)
+            optimizer_state = resume_checkpoint.get("optimizer_state")
+            if isinstance(optimizer_state, dict):
+                try:
+                    optimizer.load_state_dict(optimizer_state)
+                except Exception:
+                    pass
         best_checkpoint_path = output_dir / "guided_regeneration_best.pt"
         latest_checkpoint_path = output_dir / "guided_regeneration_latest.pt"
         stopped_early = False
-        last_epoch = 0
+        last_epoch = max(resume_epoch, int(resume_report_payload.get("last_epoch", resume_epoch)))
         start_time = time.time()
         hardware_summary = (
             f"{device.type} | {float(hardware_profile.get('gpu_memory_gb', 0.0)):.1f}GB | "
@@ -4689,6 +4788,12 @@ class GuidedSVSManager:
             f"frames {max_frames} | workers {num_workers}"
         )
         loader_safe_mode = False
+        target_end_epoch = max(resume_epoch, 0) + int(requested_run_epochs)
+        resume_note = (
+            f" | resuming from epoch {resume_epoch} | start phase {normalized_start_phase}"
+            if resume_checkpoint
+            else ""
+        )
 
         update_status(
             "guided-svs-train",
@@ -4696,12 +4801,12 @@ class GuidedSVSManager:
             (
                 f"Windows {len(train_entries)} train / {len(val_entries)} val | "
                 f"filtered out {int(filter_metadata.get('dropped_total', 0))} weak slices | "
-                f"{hardware_summary} | DTW-warped guides + lyric supervision + curriculum"
+                f"{hardware_summary} | DTW-warped guides + lyric supervision + curriculum{resume_note}"
             ),
             6,
         )
 
-        for epoch in range(1, max(1, int(total_epochs)) + 1):
+        for epoch in range(max(1, resume_epoch + 1), max(1, target_end_epoch) + 1):
             if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
                 stopped_early = True
                 break
@@ -4709,7 +4814,10 @@ class GuidedSVSManager:
             active_train_entries, curriculum_state = self._select_curriculum_entries(
                 entries=train_entries,
                 epoch=epoch,
-                total_epochs=max(total_epochs, 1),
+                total_epochs=max(target_end_epoch, 1),
+                start_phase=normalized_start_phase,
+                warmup_end_epoch=warmup_end_epoch,
+                bridge_end_epoch=bridge_end_epoch,
             )
             while True:
                 active_worker_count = 0 if loader_safe_mode else num_workers
@@ -5000,6 +5108,7 @@ class GuidedSVSManager:
                 path=latest_checkpoint_path,
                 model=model,
                 optimizer=optimizer,
+                scheduler=scheduler,
                 epoch=epoch,
                 best_val_loss=best_val_loss,
                 config=config,
@@ -5009,6 +5118,7 @@ class GuidedSVSManager:
                     path=best_checkpoint_path,
                     model=model,
                     optimizer=optimizer,
+                    scheduler=scheduler,
                     epoch=epoch,
                     best_val_loss=best_val_loss,
                     config=config,
@@ -5018,16 +5128,18 @@ class GuidedSVSManager:
                     path=output_dir / f"guided_regeneration_epoch_{epoch:04d}.pt",
                     model=model,
                     optimizer=optimizer,
+                    scheduler=scheduler,
                     epoch=epoch,
                     best_val_loss=best_val_loss,
                     config=config,
                 )
 
-            progress = min(82, max(10, int(round((epoch / max(total_epochs, 1)) * 82))))
+            completed_run_epochs = max(1, epoch - resume_epoch)
+            progress = min(82, max(10, int(round((completed_run_epochs / max(requested_run_epochs, 1)) * 82))))
             update_status(
                 "guided-svs-train",
                 (
-                    f"Voice-builder epoch {epoch}/{max(total_epochs, 1)} | "
+                    f"Voice-builder epoch {epoch}/{max(target_end_epoch, 1)} | "
                     f"{curriculum_state.get('name', 'full-diversity')} | {quality_state}"
                 ),
                 (
@@ -5113,6 +5225,9 @@ class GuidedSVSManager:
             "optimizer_mode": "fused-adamw" if optimizer_kwargs.get("fused") else "adamw",
             "pair_filtering": dict(filter_metadata),
             "search_mode": "mc-dropout-target-voice-rerank",
+            "resume_epoch": int(resume_epoch),
+            "target_end_epoch": int(target_end_epoch),
+            "start_phase": normalized_start_phase,
             "voice_signature_dim": VOICE_SIGNATURE_DIM,
             "checkpoint_path": str(best_checkpoint_path if best_checkpoint_path.exists() else latest_checkpoint_path),
             "latest_checkpoint_path": str(latest_checkpoint_path),
@@ -5165,6 +5280,9 @@ class GuidedSVSManager:
             "vocoder_quality_summary": str(vocoder_metadata.get("quality_summary", "")),
             "vocoder_hardware_summary": str(vocoder_metadata.get("hardware_summary", "")),
             "render_mode": str(vocoder_metadata.get("render_mode", preview_metadata.get("preview_render_mode", "griffinlim_preview_only"))),
+            "resume_epoch": int(resume_epoch),
+            "target_end_epoch": int(target_end_epoch),
+            "start_phase": normalized_start_phase,
             "last_epoch": int(last_epoch),
             "sample_count": int(stats.get("sample_count", 0)),
             "stopped_early": bool(stopped_early),

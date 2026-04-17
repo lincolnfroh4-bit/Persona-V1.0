@@ -897,6 +897,36 @@
 
             <div class="section-head compact">
               <div>
+                <p class="section-kicker">Resume</p>
+                <h3>Continue a saved Persona package</h3>
+              </div>
+            </div>
+            <div class="field-grid">
+              <label class="field">
+                <span>Resume from package</span>
+                <select id="trainingResumePackageSelect">
+                  <option value="">Start fresh (no saved package)</option>
+                </select>
+                <small>Loads the latest saved guide-builder checkpoint from that Persona package before this run starts.</small>
+              </label>
+              <label class="field">
+                <span>Start training phase</span>
+                <select id="trainingStartPhase">
+                  <option value="auto">Auto (pick up based on saved epoch)</option>
+                  <option value="warm-up">Warm-up</option>
+                  <option value="curriculum-bridge">Curriculum bridge</option>
+                  <option value="full-diversity">Full diversity</option>
+                </select>
+                <small>Use bridge or full diversity to skip the long warm-up on a previously trained package.</small>
+              </label>
+            </div>
+            <div class="hint-card">
+              <strong id="trainingResumeSummary">Start fresh, or pick a Persona package to continue from its latest saved checkpoint.</strong>
+              <p>Resume still uses the audio and plan you upload below. It reloads the saved builder weights, keeps the model's absolute epoch count, and continues from the phase you choose.</p>
+            </div>
+
+            <div class="section-head compact">
+              <div>
                 <p class="section-kicker">Step 2</p>
                 <h3>Add the audio library</h3>
               </div>

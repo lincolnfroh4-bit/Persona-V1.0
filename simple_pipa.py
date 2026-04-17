@@ -188,6 +188,15 @@ class PIPAModelStore:
                 manifest.get("package_mode", manifest.get("backbone", {}).get("output_mode", "pipa-full"))
                 or "pipa-full"
             ).strip()
+            report_path = str(manifest.get("guided_regeneration_report_path", "") or "").strip()
+            report_payload: Dict[str, object] = {}
+            if report_path and Path(report_path).exists():
+                try:
+                    loaded_report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+                    if isinstance(loaded_report, dict):
+                        report_payload = loaded_report
+                except Exception:
+                    report_payload = {}
             if not bundle_id or not selection_name:
                 continue
             bundles.append(
@@ -226,8 +235,18 @@ class PIPAModelStore:
                     "guided_regeneration_report_path": str(
                         manifest.get("guided_regeneration_report_path", "") or ""
                     ),
+                    "guided_regeneration_latest_path": str(
+                        manifest.get("guided_regeneration_latest_path", "")
+                        or report_payload.get("latest_checkpoint_path", "")
+                        or ""
+                    ),
                     "guided_vocoder_path": str(
                         manifest.get("guided_vocoder_path", "") or ""
+                    ),
+                    "guided_vocoder_latest_path": str(
+                        manifest.get("guided_vocoder_latest_path", "")
+                        or ((report_payload.get("guided_vocoder", {}) or {}).get("latest_checkpoint_path", ""))
+                        or ""
                     ),
                     "guided_vocoder_config_path": str(
                         manifest.get("guided_vocoder_config_path", "") or ""
@@ -261,6 +280,10 @@ class PIPAModelStore:
                     "reference_phrase_count": int(
                         manifest.get("dataset", {}).get("reference_phrase_count", 0)
                     ),
+                    "guided_regeneration_best_epoch": int(report_payload.get("best_epoch", 0)),
+                    "guided_regeneration_last_epoch": int(report_payload.get("last_epoch", 0)),
+                    "guided_regeneration_best_val_total": float(report_payload.get("best_val_total", 0.0)),
+                    "guided_regeneration_quality_summary": str(report_payload.get("quality_summary", "") or ""),
                 }
             )
         return bundles
@@ -1739,6 +1762,9 @@ class PIPAModelStore:
         batch_size: int,
         update_status: Callable[[str, str, str, int], None],
         cancel_event: Optional[threading.Event] = None,
+        resume_checkpoint_path: Optional[Path] = None,
+        resume_report_path: Optional[Path] = None,
+        start_phase: str = "auto",
     ) -> Dict[str, object]:
         return self.guided_svs.train_guided_regenerator(
             dataset_dir=dataset_dir,
@@ -1748,6 +1774,9 @@ class PIPAModelStore:
             batch_size=batch_size,
             update_status=update_status,
             cancel_event=cancel_event,
+            resume_checkpoint_path=resume_checkpoint_path,
+            resume_report_path=resume_report_path,
+            start_phase=start_phase,
         )
 
     def finalize_training_package(
@@ -1802,10 +1831,12 @@ class PIPAModelStore:
             "transcript_manifest_path": str(final_dir / "transcript_manifest.json"),
             "reference_bank_index_path": str(final_dir / "reference_bank_index.json"),
             "guided_regeneration_path": map_build_path(str(regen.get("checkpoint_path", "") or "")),
+            "guided_regeneration_latest_path": map_build_path(str(regen.get("latest_checkpoint_path", "") or "")),
             "guided_regeneration_config_path": map_build_path(str(regen.get("config_path", "") or "")),
             "guided_regeneration_stats_path": map_build_path(str(prep_metadata.get("guided_svs_stats_path", "") or "")),
             "guided_regeneration_report_path": map_build_path(str(regen.get("report_path", "") or "")),
             "guided_vocoder_path": map_build_path(str(regen.get("vocoder_checkpoint_path", "") or "")),
+            "guided_vocoder_latest_path": map_build_path(str(regen.get("vocoder_latest_checkpoint_path", "") or "")),
             "guided_vocoder_config_path": map_build_path(str(regen.get("vocoder_config_path", "") or "")),
             "guided_vocoder_report_path": map_build_path(str(regen.get("vocoder_report_path", "") or "")),
             "guided_vocoder_history_path": map_build_path(str(regen.get("vocoder_history_path", "") or "")),
