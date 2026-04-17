@@ -1055,8 +1055,24 @@
                 </label>
 
                 <label class="field">
-                  <span>Total epochs</span>
-                  <input id="trainingEpochs" type="number" min="1" max="10000" value="200">
+                  <span>Warm-up epochs</span>
+                  <input id="trainingWarmupEpochs" type="number" min="0" max="10000" value="200">
+                </label>
+
+                <label class="field">
+                  <span>Curriculum bridge epochs</span>
+                  <input id="trainingBridgeEpochs" type="number" min="0" max="10000" value="500">
+                </label>
+
+                <label class="field">
+                  <span>Full diversity epochs</span>
+                  <input id="trainingFullDiversityEpochs" type="number" min="0" max="10000" value="500">
+                </label>
+
+                <label class="field">
+                  <span>Planned schedule total</span>
+                  <input id="trainingEpochs" type="number" min="1" max="30000" value="1200" readonly>
+                  <small id="trainingCurriculumSummary">Warm-up 200, bridge 500, full diversity 500. Fixed mode will stop after 1200 scheduled epochs.</small>
                 </label>
 
                 <label class="field">

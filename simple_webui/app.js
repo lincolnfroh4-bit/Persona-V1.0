@@ -306,7 +306,11 @@ const trainingStartPhase = document.getElementById("trainingStartPhase");
 const trainingResumeSummary = document.getElementById("trainingResumeSummary");
 const trainingEpochMode = document.getElementById("trainingEpochMode");
 const trainingEpochModeSummary = document.getElementById("trainingEpochModeSummary");
+const trainingWarmupEpochs = document.getElementById("trainingWarmupEpochs");
+const trainingBridgeEpochs = document.getElementById("trainingBridgeEpochs");
+const trainingFullDiversityEpochs = document.getElementById("trainingFullDiversityEpochs");
 const trainingEpochs = document.getElementById("trainingEpochs");
+const trainingCurriculumSummary = document.getElementById("trainingCurriculumSummary");
 const trainingSaveEvery = document.getElementById("trainingSaveEvery");
 const trainingBatchSize = document.getElementById("trainingBatchSize");
 const trainingCrepeHopLength = document.getElementById("trainingCrepeHopLength");
@@ -570,18 +574,92 @@ function syncTrainingRunModeUI() {
   const manualStop = trainingEpochMode?.value !== "fixed";
   if (trainingEpochModeSummary) {
     if (isLogicOnly && manualStop) {
-      trainingEpochModeSummary.textContent = "Persona v1.0 trains only the guide-conditioned voice-builder and pronunciation assets. It keeps going until you click Stop.";
+      trainingEpochModeSummary.textContent = "Persona v1.0 trains only the guide-conditioned voice-builder and pronunciation assets. It keeps going until you click Stop, then stays in full diversity after the scheduled stages are finished.";
     } else if (isLogicOnly) {
-      trainingEpochModeSummary.textContent = "Persona v1.0 skips every legacy backbone stage. It stops automatically at the epoch count below and packages the paired-song regenerator plus pronunciation assets.";
+      trainingEpochModeSummary.textContent = "Persona v1.0 skips every legacy backbone stage. It stops automatically after the scheduled warm-up, bridge, and full-diversity epochs below.";
     } else if (manualStop) {
       trainingEpochModeSummary.textContent = "Manual-stop runs the paired voice-builder pass first, then continues training the RVC backbone until you click Stop. 'Save every' controls how often a fresh usable checkpoint is written.";
     } else {
-      trainingEpochModeSummary.textContent = "Fixed mode stops automatically at the epoch count below after the paired voice-builder pass and, when enabled, the backbone stages finish.";
+      trainingEpochModeSummary.textContent = "Fixed mode stops automatically after the scheduled stages below. When enabled, the backbone stages finish after the paired voice-builder schedule.";
     }
   }
-  if (trainingEpochs) {
-    trainingEpochs.disabled = manualStop;
+  updateTrainingCurriculumSummary();
+}
+
+function clampTrainingStageEpochInput(input, fallback) {
+  if (!input) {
+    return fallback;
   }
+  const parsed = Number.parseInt(input.value || "", 10);
+  const nextValue = Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 10000)) : fallback;
+  input.value = String(nextValue);
+  return nextValue;
+}
+
+function getTrainingCurriculumPlan() {
+  const warmup = clampTrainingStageEpochInput(trainingWarmupEpochs, 200);
+  const bridge = clampTrainingStageEpochInput(trainingBridgeEpochs, 500);
+  const full = clampTrainingStageEpochInput(trainingFullDiversityEpochs, 500);
+  const startPhase = trainingStartPhase?.value || "auto";
+  const selectedResume = (state.pipaPackages || []).find(
+    (entry) => entry.name === (trainingResumePackageSelect?.value || ""),
+  );
+  const resumeEpoch = Number(selectedResume?.guided_regeneration_last_epoch || 0);
+  let warmupRemaining = warmup;
+  let bridgeRemaining = bridge;
+  let fullRemaining = full;
+
+  if (startPhase === "curriculum-bridge") {
+    warmupRemaining = 0;
+  } else if (startPhase === "full-diversity") {
+    warmupRemaining = 0;
+    bridgeRemaining = 0;
+  } else if (startPhase === "auto" && resumeEpoch > 0) {
+    const warmupEnd = warmup;
+    const bridgeEnd = warmup + bridge;
+    if (resumeEpoch < warmupEnd) {
+      warmupRemaining = Math.max(0, warmupEnd - resumeEpoch);
+      bridgeRemaining = bridge;
+      fullRemaining = full;
+    } else if (resumeEpoch < bridgeEnd) {
+      warmupRemaining = 0;
+      bridgeRemaining = Math.max(0, bridgeEnd - resumeEpoch);
+      fullRemaining = full;
+    } else {
+      warmupRemaining = 0;
+      bridgeRemaining = 0;
+      fullRemaining = full;
+    }
+  }
+
+  const fixedTotal = Math.max(1, warmupRemaining + bridgeRemaining + fullRemaining);
+  return {
+    warmup,
+    bridge,
+    full,
+    resumeEpoch,
+    fixedWarmup: warmupRemaining,
+    fixedBridge: bridgeRemaining,
+    fixedFull: fullRemaining,
+    fixedTotal,
+  };
+}
+
+function updateTrainingCurriculumSummary() {
+  const plan = getTrainingCurriculumPlan();
+  if (trainingEpochs) {
+    trainingEpochs.value = String(plan.fixedTotal);
+  }
+  if (!trainingCurriculumSummary) {
+    return;
+  }
+  const manualStop = trainingEpochMode?.value !== "fixed";
+  const phaseLine = `Warm-up ${plan.fixedWarmup}, bridge ${plan.fixedBridge}, full diversity ${plan.fixedFull}.`;
+  if (manualStop) {
+    trainingCurriculumSummary.textContent = `${phaseLine} Manual-stop will keep going in full diversity after roughly ${plan.fixedTotal} scheduled epochs unless you stop earlier.`;
+    return;
+  }
+  trainingCurriculumSummary.textContent = `${phaseLine} Fixed mode will stop after ${plan.fixedTotal} scheduled epochs.`;
 }
 
 function formatBytes(bytes) {
@@ -2168,6 +2246,7 @@ function renderTrainingResumeOptions() {
     ? previousValue
     : "";
   updateTrainingResumeSummary();
+  updateTrainingCurriculumSummary();
 }
 
 function downloadSelectedTrainingPackage() {
@@ -3744,7 +3823,11 @@ async function startTraining() {
   data.append("output_mode", trainingOutputMode.value || "pipa-full");
   data.append("epoch_mode", trainingEpochMode?.value || "manual-stop");
   data.append("alignment_tolerance", trainingAlignmentTolerance?.value || "forgiving");
-  data.append("total_epochs", trainingEpochs.value || "200");
+  const curriculumPlan = getTrainingCurriculumPlan();
+  data.append("total_epochs", String(curriculumPlan.fixedTotal || 1));
+  data.append("warmup_stage_epochs", String(curriculumPlan.warmup || 0));
+  data.append("bridge_stage_epochs", String(curriculumPlan.bridge || 0));
+  data.append("full_diversity_stage_epochs", String(curriculumPlan.full || 0));
   data.append("save_every_epoch", trainingSaveEvery.value || "25");
   data.append("batch_size", trainingBatchSize.value || "4");
   data.append("crepe_hop_length", trainingCrepeHopLength.value || "128");
@@ -4509,7 +4592,14 @@ bindIfPresent(trainingOutputMode, "change", syncTrainingRunModeUI);
 bindIfPresent(trainingEpochMode, "change", syncTrainingRunModeUI);
 bindIfPresent(trainingPackageDownloadSelect, "change", updateTrainingPackageDownloadSummary);
 bindIfPresent(downloadTrainingPackageButton, "click", downloadSelectedTrainingPackage);
-bindIfPresent(trainingResumePackageSelect, "change", updateTrainingResumeSummary);
+bindIfPresent(trainingResumePackageSelect, "change", () => {
+  updateTrainingResumeSummary();
+  updateTrainingCurriculumSummary();
+});
+bindIfPresent(trainingStartPhase, "change", updateTrainingCurriculumSummary);
+bindIfPresent(trainingWarmupEpochs, "input", updateTrainingCurriculumSummary);
+bindIfPresent(trainingBridgeEpochs, "input", updateTrainingCurriculumSummary);
+bindIfPresent(trainingFullDiversityEpochs, "input", updateTrainingCurriculumSummary);
 
 bindIfPresent(pitchPreset, "change", () => {
   customPitchField.classList.toggle("hidden", pitchPreset.value !== "custom");

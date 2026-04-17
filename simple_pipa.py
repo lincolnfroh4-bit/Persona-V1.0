@@ -1765,6 +1765,9 @@ class PIPAModelStore:
         resume_checkpoint_path: Optional[Path] = None,
         resume_report_path: Optional[Path] = None,
         start_phase: str = "auto",
+        warmup_stage_epochs: int = 600,
+        bridge_stage_epochs: int = 1200,
+        full_diversity_stage_epochs: int = 600,
     ) -> Dict[str, object]:
         return self.guided_svs.train_guided_regenerator(
             dataset_dir=dataset_dir,
@@ -1777,6 +1780,9 @@ class PIPAModelStore:
             resume_checkpoint_path=resume_checkpoint_path,
             resume_report_path=resume_report_path,
             start_phase=start_phase,
+            warmup_stage_epochs=warmup_stage_epochs,
+            bridge_stage_epochs=bridge_stage_epochs,
+            full_diversity_stage_epochs=full_diversity_stage_epochs,
         )
 
     def finalize_training_package(
@@ -1880,6 +1886,11 @@ class PIPAModelStore:
                 "version": str(settings.get("version", "")),
                 "f0_method": str(settings.get("f0_method", "")),
                 "total_epochs": int(settings.get("total_epochs", 0)),
+                "requested_total_epochs": int(settings.get("requested_total_epochs", 0)),
+                "warmup_stage_epochs": int(settings.get("warmup_stage_epochs", 0)),
+                "bridge_stage_epochs": int(settings.get("bridge_stage_epochs", 0)),
+                "full_diversity_stage_epochs": int(settings.get("full_diversity_stage_epochs", 0)),
+                "start_phase": str(settings.get("start_phase", "auto") or "auto"),
                 "save_every_epoch": int(settings.get("save_every_epoch", 0)),
                 "batch_size": int(settings.get("batch_size", 0)),
                 "build_index": bool(settings.get("build_index", False)),

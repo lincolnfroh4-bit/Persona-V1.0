@@ -3508,7 +3508,6 @@ class GuidedSVSManager:
         entries: Sequence[Dict[str, object]],
         epoch: int,
         total_epochs: int,
-        start_phase: str = "auto",
         warmup_end_epoch: int = 600,
         bridge_end_epoch: int = 1800,
     ) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
@@ -3526,33 +3525,17 @@ class GuidedSVSManager:
                 -float(entry.get("alignment_score", 0.0)),
             ),
         )
-        normalized_phase = str(start_phase or "auto").strip().lower()
-        normalized_phase = {
-            "warmup": "warm-up",
-            "bridge": "curriculum-bridge",
-            "full": "full-diversity",
-        }.get(normalized_phase, normalized_phase)
-        if normalized_phase == "warm-up":
+        effective_warmup_end = max(0, int(warmup_end_epoch))
+        effective_bridge_end = max(effective_warmup_end, int(bridge_end_epoch))
+        if epoch <= effective_warmup_end and effective_warmup_end > 0:
             fraction = 0.35
             phase_name = "warm-up"
-        elif normalized_phase == "curriculum-bridge":
+        elif epoch <= effective_bridge_end and effective_bridge_end > effective_warmup_end:
             fraction = 0.7
             phase_name = "curriculum-bridge"
-        elif normalized_phase == "full-diversity":
+        else:
             fraction = 1.0
             phase_name = "full-diversity"
-        else:
-            effective_warmup_end = max(1, int(warmup_end_epoch))
-            effective_bridge_end = max(effective_warmup_end, int(bridge_end_epoch))
-            if epoch <= effective_warmup_end:
-                fraction = 0.35
-                phase_name = "warm-up"
-            elif epoch <= effective_bridge_end:
-                fraction = 0.7
-                phase_name = "curriculum-bridge"
-            else:
-                fraction = 1.0
-                phase_name = "full-diversity"
         keep_count = len(paired_entries) if fraction >= 0.999 else max(1, int(math.ceil(len(paired_entries) * fraction)))
         selected = identity_entries + paired_entries[:keep_count]
         if not selected:
@@ -3563,6 +3546,52 @@ class GuidedSVSManager:
             "selected_count": len(selected),
             "paired_count": len(paired_entries),
             "identity_count": len(identity_entries),
+        }
+
+    def _normalize_curriculum_phase(self, start_phase: str) -> str:
+        normalized_phase = str(start_phase or "auto").strip().lower()
+        return {
+            "warmup": "warm-up",
+            "bridge": "curriculum-bridge",
+            "full": "full-diversity",
+        }.get(normalized_phase, normalized_phase)
+
+    def _resolve_curriculum_schedule(
+        self,
+        *,
+        start_phase: str,
+        resume_epoch: int,
+        warmup_stage_epochs: int,
+        bridge_stage_epochs: int,
+        full_diversity_stage_epochs: int,
+    ) -> Dict[str, int | str]:
+        normalized_phase = self._normalize_curriculum_phase(start_phase)
+        anchor_epoch = 0 if normalized_phase == "auto" else max(0, int(resume_epoch))
+        effective_warmup = max(0, int(warmup_stage_epochs))
+        effective_bridge = max(0, int(bridge_stage_epochs))
+        effective_full = max(0, int(full_diversity_stage_epochs))
+        if normalized_phase == "warm-up":
+            warmup_budget = effective_warmup
+            bridge_budget = effective_bridge
+        elif normalized_phase == "curriculum-bridge":
+            warmup_budget = 0
+            bridge_budget = effective_bridge
+        elif normalized_phase == "full-diversity":
+            warmup_budget = 0
+            bridge_budget = 0
+        else:
+            warmup_budget = effective_warmup
+            bridge_budget = effective_bridge
+        warmup_end_epoch = anchor_epoch + warmup_budget
+        bridge_end_epoch = warmup_end_epoch + bridge_budget
+        return {
+            "normalized_start_phase": normalized_phase,
+            "anchor_epoch": int(anchor_epoch),
+            "warmup_stage_epochs": int(effective_warmup),
+            "bridge_stage_epochs": int(effective_bridge),
+            "full_diversity_stage_epochs": int(effective_full),
+            "warmup_end_epoch": int(warmup_end_epoch),
+            "bridge_end_epoch": int(bridge_end_epoch),
         }
 
     def _instantiate_model(self, config: Optional[Dict[str, object]] = None) -> nn.Module:
@@ -4576,6 +4605,9 @@ class GuidedSVSManager:
         resume_checkpoint_path: Optional[Path] = None,
         resume_report_path: Optional[Path] = None,
         start_phase: str = "auto",
+        warmup_stage_epochs: int = 600,
+        bridge_stage_epochs: int = 1200,
+        full_diversity_stage_epochs: int = 600,
     ) -> Dict[str, object]:
         output_dir.mkdir(parents=True, exist_ok=True)
         hardware_profile = self._get_training_hardware_profile()
@@ -4583,14 +4615,7 @@ class GuidedSVSManager:
         num_workers = int(hardware_profile.get("num_workers", 0))
         prefetch_factor = int(hardware_profile.get("prefetch_factor", 2))
         requested_run_epochs = max(1, int(total_epochs))
-        warmup_end_epoch = 600
-        bridge_end_epoch = 1800
-        normalized_start_phase = str(start_phase or "auto").strip().lower()
-        normalized_start_phase = {
-            "warmup": "warm-up",
-            "bridge": "curriculum-bridge",
-            "full": "full-diversity",
-        }.get(normalized_start_phase, normalized_start_phase)
+        normalized_start_phase = self._normalize_curriculum_phase(start_phase)
         train_loader, val_loader, stats, train_entries, val_entries, filter_metadata = self._build_loaders(
             dataset_dir=dataset_dir,
             max_frames=max_frames,
@@ -4610,6 +4635,15 @@ class GuidedSVSManager:
                 raise FileNotFoundError(f"Resume checkpoint was not found: {resolved_resume_checkpoint}")
             resume_checkpoint = torch.load(resolved_resume_checkpoint, map_location="cpu")
             resume_epoch = max(0, int(resume_checkpoint.get("epoch", 0)))
+        curriculum_schedule = self._resolve_curriculum_schedule(
+            start_phase=normalized_start_phase,
+            resume_epoch=resume_epoch,
+            warmup_stage_epochs=warmup_stage_epochs,
+            bridge_stage_epochs=bridge_stage_epochs,
+            full_diversity_stage_epochs=full_diversity_stage_epochs,
+        )
+        warmup_end_epoch = int(curriculum_schedule["warmup_end_epoch"])
+        bridge_end_epoch = int(curriculum_schedule["bridge_end_epoch"])
         if device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
@@ -4661,6 +4695,10 @@ class GuidedSVSManager:
                     {"name": "curriculum-bridge", "fraction": 0.7},
                     {"name": "full-diversity", "fraction": 1.0},
                 ],
+                "warmup_stage_epochs": int(curriculum_schedule["warmup_stage_epochs"]),
+                "bridge_stage_epochs": int(curriculum_schedule["bridge_stage_epochs"]),
+                "full_diversity_stage_epochs": int(curriculum_schedule["full_diversity_stage_epochs"]),
+                "anchor_epoch": int(curriculum_schedule["anchor_epoch"]),
                 "warmup_end_epoch": int(warmup_end_epoch),
                 "bridge_end_epoch": int(bridge_end_epoch),
                 "start_phase": normalized_start_phase,
@@ -4698,6 +4736,10 @@ class GuidedSVSManager:
             merged_curriculum.update(
                 {
                     "enabled": True,
+                    "warmup_stage_epochs": int(curriculum_schedule["warmup_stage_epochs"]),
+                    "bridge_stage_epochs": int(curriculum_schedule["bridge_stage_epochs"]),
+                    "full_diversity_stage_epochs": int(curriculum_schedule["full_diversity_stage_epochs"]),
+                    "anchor_epoch": int(curriculum_schedule["anchor_epoch"]),
                     "warmup_end_epoch": int(warmup_end_epoch),
                     "bridge_end_epoch": int(bridge_end_epoch),
                     "start_phase": normalized_start_phase,
@@ -4794,6 +4836,11 @@ class GuidedSVSManager:
             if resume_checkpoint
             else ""
         )
+        curriculum_summary = (
+            f"W {int(curriculum_schedule['warmup_stage_epochs'])} | "
+            f"B {int(curriculum_schedule['bridge_stage_epochs'])} | "
+            f"F {int(curriculum_schedule['full_diversity_stage_epochs'])}"
+        )
 
         update_status(
             "guided-svs-train",
@@ -4801,7 +4848,8 @@ class GuidedSVSManager:
             (
                 f"Windows {len(train_entries)} train / {len(val_entries)} val | "
                 f"filtered out {int(filter_metadata.get('dropped_total', 0))} weak slices | "
-                f"{hardware_summary} | DTW-warped guides + lyric supervision + curriculum{resume_note}"
+                f"{hardware_summary} | DTW-warped guides + lyric supervision + curriculum "
+                f"({curriculum_summary}){resume_note}"
             ),
             6,
         )
@@ -4815,7 +4863,6 @@ class GuidedSVSManager:
                 entries=train_entries,
                 epoch=epoch,
                 total_epochs=max(target_end_epoch, 1),
-                start_phase=normalized_start_phase,
                 warmup_end_epoch=warmup_end_epoch,
                 bridge_end_epoch=bridge_end_epoch,
             )
@@ -5228,6 +5275,7 @@ class GuidedSVSManager:
             "resume_epoch": int(resume_epoch),
             "target_end_epoch": int(target_end_epoch),
             "start_phase": normalized_start_phase,
+            "curriculum": dict(config.get("curriculum", {})),
             "voice_signature_dim": VOICE_SIGNATURE_DIM,
             "checkpoint_path": str(best_checkpoint_path if best_checkpoint_path.exists() else latest_checkpoint_path),
             "latest_checkpoint_path": str(latest_checkpoint_path),
@@ -5283,6 +5331,7 @@ class GuidedSVSManager:
             "resume_epoch": int(resume_epoch),
             "target_end_epoch": int(target_end_epoch),
             "start_phase": normalized_start_phase,
+            "curriculum": dict(config.get("curriculum", {})),
             "last_epoch": int(last_epoch),
             "sample_count": int(stats.get("sample_count", 0)),
             "stopped_early": bool(stopped_early),

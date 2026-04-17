@@ -843,6 +843,69 @@ def _assert_persona_runtime_available(requested_label: str) -> None:
     )
 
 
+def _normalize_training_start_phase(start_phase: str) -> str:
+    normalized = str(start_phase or "auto").strip().lower()
+    return {
+        "warmup": "warm-up",
+        "bridge": "curriculum-bridge",
+        "full": "full-diversity",
+    }.get(normalized, normalized)
+
+
+def _resolve_curriculum_run_plan(
+    *,
+    start_phase: str,
+    resume_epoch: int,
+    warmup_stage_epochs: int,
+    bridge_stage_epochs: int,
+    full_diversity_stage_epochs: int,
+) -> Dict[str, int | str]:
+    normalized_start_phase = _normalize_training_start_phase(start_phase)
+    current_epoch = max(0, int(resume_epoch))
+    warmup_epochs = max(0, int(warmup_stage_epochs))
+    bridge_epochs = max(0, int(bridge_stage_epochs))
+    full_epochs = max(0, int(full_diversity_stage_epochs))
+    if normalized_start_phase == "warm-up":
+        warmup_remaining = warmup_epochs
+        bridge_remaining = bridge_epochs
+        full_remaining = full_epochs
+    elif normalized_start_phase == "curriculum-bridge":
+        warmup_remaining = 0
+        bridge_remaining = bridge_epochs
+        full_remaining = full_epochs
+    elif normalized_start_phase == "full-diversity":
+        warmup_remaining = 0
+        bridge_remaining = 0
+        full_remaining = full_epochs
+    else:
+        warmup_end_epoch = warmup_epochs
+        bridge_end_epoch = warmup_epochs + bridge_epochs
+        if current_epoch < warmup_end_epoch:
+            warmup_remaining = warmup_end_epoch - current_epoch
+            bridge_remaining = bridge_epochs
+            full_remaining = full_epochs
+        elif current_epoch < bridge_end_epoch:
+            warmup_remaining = 0
+            bridge_remaining = bridge_end_epoch - current_epoch
+            full_remaining = full_epochs
+        else:
+            warmup_remaining = 0
+            bridge_remaining = 0
+            full_remaining = full_epochs
+    total_remaining = warmup_remaining + bridge_remaining + full_remaining
+    if total_remaining < 1:
+        full_remaining = max(1, full_remaining)
+        total_remaining = warmup_remaining + bridge_remaining + full_remaining
+    return {
+        "start_phase": normalized_start_phase,
+        "resume_epoch": int(current_epoch),
+        "warmup_remaining_epochs": int(warmup_remaining),
+        "bridge_remaining_epochs": int(bridge_remaining),
+        "full_diversity_remaining_epochs": int(full_remaining),
+        "fixed_total_epochs": int(total_remaining),
+    }
+
+
 @contextmanager
 def _persona_runtime_session(mode: str, job_id: str):
     label = _persona_runtime_label(mode)
@@ -2844,15 +2907,9 @@ def start_training_job(
     )
     resume_selection_name = str(settings.get("resume_selection_name", "") or "").strip()
     start_phase = str(settings.get("start_phase", "auto") or "auto").strip()
-    guided_total_epochs = max(
-        1,
-        int(
-            settings.get(
-                "guided_regeneration_epochs",
-                settings.get("requested_total_epochs", settings.get("total_epochs", 200)),
-            )
-        ),
-    )
+    warmup_stage_epochs = max(0, int(settings.get("warmup_stage_epochs", 200)))
+    bridge_stage_epochs = max(0, int(settings.get("bridge_stage_epochs", 500)))
+    full_diversity_stage_epochs = max(0, int(settings.get("full_diversity_stage_epochs", 500)))
 
     def map_guided_training_progress(raw_progress: int) -> int:
         normalized = max(0, min(int(raw_progress), 100))
@@ -2895,6 +2952,7 @@ def start_training_job(
             )
         resume_checkpoint_path = None
         resume_report_path = None
+        resume_epoch_hint = 0
         if resume_bundle is not None:
             latest_checkpoint = Path(
                 str(
@@ -2914,6 +2972,29 @@ def start_training_job(
                 candidate_report = Path(raw_resume_report)
                 if candidate_report.exists():
                     resume_report_path = candidate_report
+            resume_epoch_hint = max(
+                0,
+                int(
+                    resume_bundle.get(
+                        "guided_regeneration_last_epoch",
+                        resume_bundle.get("last_epoch", 0),
+                    )
+                    or 0
+                ),
+            )
+        run_plan = _resolve_curriculum_run_plan(
+            start_phase=start_phase,
+            resume_epoch=resume_epoch_hint,
+            warmup_stage_epochs=warmup_stage_epochs,
+            bridge_stage_epochs=bridge_stage_epochs,
+            full_diversity_stage_epochs=full_diversity_stage_epochs,
+        )
+        guided_total_epochs = int(run_plan["fixed_total_epochs"])
+        if str(settings.get("epoch_mode", "manual-stop") or "manual-stop") != "fixed":
+            if output_mode == "pipa-logic-only":
+                guided_total_epochs = max(guided_total_epochs, 20000)
+            else:
+                guided_total_epochs = max(guided_total_epochs, 600)
         pipa_build_dir = job_root / "pipa-build"
         reset_directory(pipa_build_dir)
         prep_metadata = backend.pipa_store.prepare_training_assets(
@@ -2951,6 +3032,9 @@ def start_training_job(
             resume_checkpoint_path=resume_checkpoint_path,
             resume_report_path=resume_report_path,
             start_phase=start_phase,
+            warmup_stage_epochs=warmup_stage_epochs,
+            bridge_stage_epochs=bridge_stage_epochs,
+            full_diversity_stage_epochs=full_diversity_stage_epochs,
         )
 
         guided_dataset_features_dir = Path(str(prep_metadata["guided_svs_dataset_dir"])) / "features"
@@ -5516,7 +5600,10 @@ async def create_training_job(
     output_mode: str = Form("persona-v1"),
     epoch_mode: str = Form("manual-stop"),
     alignment_tolerance: str = Form("forgiving"),
-    total_epochs: int = Form(200),
+    total_epochs: int = Form(1200),
+    warmup_stage_epochs: int = Form(200),
+    bridge_stage_epochs: int = Form(500),
+    full_diversity_stage_epochs: int = Form(500),
     save_every_epoch: int = Form(25),
     batch_size: int = Form(4),
     crepe_hop_length: int = Form(128),
@@ -5551,16 +5638,16 @@ async def create_training_job(
         raise HTTPException(status_code=400, detail="Unsupported training length mode.")
     if alignment_tolerance not in {"forgiving", "balanced", "strict"}:
         raise HTTPException(status_code=400, detail="Unsupported transcript alignment tolerance.")
-    start_phase = str(start_phase or "auto").strip().lower()
-    start_phase = {
-        "warmup": "warm-up",
-        "bridge": "curriculum-bridge",
-        "full": "full-diversity",
-    }.get(start_phase, start_phase)
+    start_phase = _normalize_training_start_phase(start_phase)
     if start_phase not in {"auto", "warm-up", "curriculum-bridge", "full-diversity"}:
         raise HTTPException(status_code=400, detail="Unsupported training start phase.")
 
-    requested_total_epochs = max(1, min(int(total_epochs), 10000))
+    warmup_stage_epochs = max(0, min(int(warmup_stage_epochs), 10000))
+    bridge_stage_epochs = max(0, min(int(bridge_stage_epochs), 10000))
+    full_diversity_stage_epochs = max(0, min(int(full_diversity_stage_epochs), 10000))
+    requested_total_epochs = warmup_stage_epochs + bridge_stage_epochs + full_diversity_stage_epochs
+    if requested_total_epochs < 1:
+        raise HTTPException(status_code=400, detail="Set at least one curriculum stage to run for one epoch or more.")
     total_epochs = requested_total_epochs
     guided_regeneration_epochs = requested_total_epochs
     persona_only_mode = output_mode in {"persona-v1", "pipa-logic-only"}
@@ -5627,6 +5714,9 @@ async def create_training_job(
         "requested_total_epochs": requested_total_epochs,
         "total_epochs": total_epochs,
         "guided_regeneration_epochs": guided_regeneration_epochs,
+        "warmup_stage_epochs": warmup_stage_epochs,
+        "bridge_stage_epochs": bridge_stage_epochs,
+        "full_diversity_stage_epochs": full_diversity_stage_epochs,
         "save_every_epoch": save_every_epoch,
         "batch_size": batch_size,
         "crepe_hop_length": crepe_hop_length,
