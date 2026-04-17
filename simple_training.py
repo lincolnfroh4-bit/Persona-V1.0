@@ -123,10 +123,9 @@ class SimpleTrainer:
 
         candidate = base_name
         counter = 2
-        while (
-            (self.logs_root / candidate).exists()
-            or (self.weights_root / f"{candidate}.pth").exists()
-        ):
+        while (self.logs_root / candidate).exists() or (
+            self.weights_root / f"{candidate}.pth"
+        ).exists():
             candidate = f"{base_name}-{counter}"
             counter += 1
         return candidate
@@ -460,7 +459,9 @@ class SimpleTrainer:
             metric_state["loss_fm"] = float(loss_match.group(3))
             metric_state["loss_mel"] = float(loss_match.group(4))
             metric_state["loss_kl"] = float(loss_match.group(5))
-            best_mel = float(metric_state.get("best_loss_mel", metric_state["loss_mel"]))
+            best_mel = float(
+                metric_state.get("best_loss_mel", metric_state["loss_mel"])
+            )
             metric_state["best_loss_mel"] = min(best_mel, metric_state["loss_mel"])
             parts.append(
                 f"mel {metric_state['loss_mel']:.2f} (best {metric_state['best_loss_mel']:.2f})"
@@ -497,10 +498,14 @@ class SimpleTrainer:
     def _summarize_training_failure(self, train_log: Path) -> str:
         combined = []
         if train_log.exists():
-            combined.extend(train_log.read_text(encoding="utf-8", errors="ignore").splitlines())
+            combined.extend(
+                train_log.read_text(encoding="utf-8", errors="ignore").splitlines()
+            )
         capture_path = self.logs_root / "_simple_web_training_capture.log"
         if capture_path.exists():
-            combined.extend(capture_path.read_text(encoding="utf-8", errors="ignore").splitlines())
+            combined.extend(
+                capture_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            )
 
         interesting = [
             line.strip()
@@ -541,7 +546,9 @@ class SimpleTrainer:
             if path.is_file() and path.suffix.lower() in self.AUDIO_EXTENSIONS
         )
         if not source_files:
-            raise RuntimeError("No supported audio files were found in the dataset folder.")
+            raise RuntimeError(
+                "No supported audio files were found in the dataset folder."
+            )
 
         gt_wavs_dir = exp_dir / "0_gt_wavs"
         wavs16k_dir = exp_dir / "1_16k_wavs"
@@ -573,7 +580,9 @@ class SimpleTrainer:
 
             wavfile.write(str(gt_target), sample_rate, audio.astype(np.float32))
             audio_16k = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-            wavfile.write(str(wav16_target), 16000, np.asarray(audio_16k, dtype=np.float32))
+            wavfile.write(
+                str(wav16_target), 16000, np.asarray(audio_16k, dtype=np.float32)
+            )
 
             progress = start_progress + int(
                 round(((index / total_files) * max(0, end_progress - start_progress)))
@@ -625,9 +634,12 @@ class SimpleTrainer:
         if use_f0:
             f0_dir = exp_dir / "2a_f0"
             f0nsf_dir = exp_dir / "2b-f0nsf"
-            f0_names = {path.name.replace(".wav.npy", "") for path in f0_dir.glob("*.wav.npy")}
+            f0_names = {
+                path.name.replace(".wav.npy", "") for path in f0_dir.glob("*.wav.npy")
+            }
             f0nsf_names = {
-                path.name.replace(".wav.npy", "") for path in f0nsf_dir.glob("*.wav.npy")
+                path.name.replace(".wav.npy", "")
+                for path in f0nsf_dir.glob("*.wav.npy")
             }
             names &= f0_names & f0nsf_names
 
@@ -644,8 +656,12 @@ class SimpleTrainer:
                     % (
                         str((gt_wavs_dir / f"{name}.wav")).replace("\\", "\\\\"),
                         str((feature_dir / f"{name}.npy")).replace("\\", "\\\\"),
-                        str((exp_dir / "2a_f0" / f"{name}.wav.npy")).replace("\\", "\\\\"),
-                        str((exp_dir / "2b-f0nsf" / f"{name}.wav.npy")).replace("\\", "\\\\"),
+                        str((exp_dir / "2a_f0" / f"{name}.wav.npy")).replace(
+                            "\\", "\\\\"
+                        ),
+                        str((exp_dir / "2b-f0nsf" / f"{name}.wav.npy")).replace(
+                            "\\", "\\\\"
+                        ),
                         speaker_id,
                     )
                 )
@@ -709,7 +725,9 @@ class SimpleTrainer:
         feature_dir = exp_dir / ("3_feature256" if version == "v1" else "3_feature768")
         feature_files = sorted(feature_dir.glob("*.npy"))
         if not feature_files:
-            raise RuntimeError("Feature extraction finished, but no features were found.")
+            raise RuntimeError(
+                "Feature extraction finished, but no features were found."
+            )
 
         npys = [np.load(str(path)) for path in feature_files]
         big_npy = np.concatenate(npys, axis=0)

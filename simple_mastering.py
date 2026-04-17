@@ -20,7 +20,9 @@ class SimpleMasteringEngine:
         local = self.repo_root / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
         return str(local) if local.exists() else "ffmpeg"
 
-    def _load_audio(self, file_path: Path, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
+    def _load_audio(
+        self, file_path: Path, sample_rate: int = 44100
+    ) -> Tuple[np.ndarray, int]:
         cleaned = str(file_path).strip().strip('"')
         out, _ = (
             ffmpeg.input(cleaned, threads=0)
@@ -43,7 +45,9 @@ class SimpleMasteringEngine:
         audio = audio.reshape(-1, 2)
         return audio.copy(), sample_rate
 
-    def _average_spectrum(self, mono_audio: np.ndarray, fft_size: int, hop_size: int) -> np.ndarray:
+    def _average_spectrum(
+        self, mono_audio: np.ndarray, fft_size: int, hop_size: int
+    ) -> np.ndarray:
         if mono_audio.size == 0:
             raise ValueError("Audio file was empty.")
 
@@ -59,7 +63,10 @@ class SimpleMasteringEngine:
             magnitudes.append(np.abs(spectrum) + 1e-8)
 
         if not magnitudes:
-            frame = np.pad(mono_audio, (0, max(0, fft_size - mono_audio.size)))[:fft_size] * window
+            frame = (
+                np.pad(mono_audio, (0, max(0, fft_size - mono_audio.size)))[:fft_size]
+                * window
+            )
             magnitudes.append(np.abs(np.fft.rfft(frame)) + 1e-8)
 
         return np.mean(np.stack(magnitudes, axis=0), axis=0)
@@ -77,7 +84,9 @@ class SimpleMasteringEngine:
         positive_freqs = np.maximum(freqs[1:], 20.0)
 
         source_mono = source_audio.mean(axis=1)
-        source_mag = self._average_spectrum(source_mono, fft_size=fft_size, hop_size=hop_size)
+        source_mag = self._average_spectrum(
+            source_mono, fft_size=fft_size, hop_size=hop_size
+        )
         if not reference_audios:
             raise ValueError("At least one reference file is required.")
 
@@ -107,7 +116,9 @@ class SimpleMasteringEngine:
 
         raw_curve_db = np.clip(reference_bands - source_bands, -12.0, 12.0)
         smoothing_sigma = float(np.interp(band_count, [8, 256], [3.8, 0.9]))
-        curve_db = gaussian_filter1d(raw_curve_db, sigma=smoothing_sigma, mode="nearest")
+        curve_db = gaussian_filter1d(
+            raw_curve_db, sigma=smoothing_sigma, mode="nearest"
+        )
         curve_db = np.clip(curve_db, -10.0, 10.0)
 
         curve_full_db = np.zeros_like(source_db)
@@ -128,15 +139,27 @@ class SimpleMasteringEngine:
         mid_mask = (display_freqs >= 200.0) & (display_freqs < 4000.0)
         air_mask = display_freqs >= 4000.0
         band_summary = {
-            "low": float(np.mean(display_curve_db[low_mask])) if np.any(low_mask) else 0.0,
-            "mid": float(np.mean(display_curve_db[mid_mask])) if np.any(mid_mask) else 0.0,
-            "air": float(np.mean(display_curve_db[air_mask])) if np.any(air_mask) else 0.0,
+            "low": (
+                float(np.mean(display_curve_db[low_mask])) if np.any(low_mask) else 0.0
+            ),
+            "mid": (
+                float(np.mean(display_curve_db[mid_mask])) if np.any(mid_mask) else 0.0
+            ),
+            "air": (
+                float(np.mean(display_curve_db[air_mask])) if np.any(air_mask) else 0.0
+            ),
         }
 
         source_rms = float(np.sqrt(np.mean(np.square(source_audio)) + 1e-9))
-        reference_rms = float(np.mean(np.asarray(reference_rms_values, dtype=np.float32)))
+        reference_rms = float(
+            np.mean(np.asarray(reference_rms_values, dtype=np.float32))
+        )
         loudness_gain_db = float(
-            np.clip(20.0 * np.log10(max(reference_rms, 1e-8) / max(source_rms, 1e-8)), -6.0, 6.0)
+            np.clip(
+                20.0 * np.log10(max(reference_rms, 1e-8) / max(source_rms, 1e-8)),
+                -6.0,
+                6.0,
+            )
         )
 
         return {
@@ -192,7 +215,9 @@ class SimpleMasteringEngine:
             )
             restored = restored[: source_audio.shape[0]]
             if restored.shape[0] < source_audio.shape[0]:
-                restored = np.pad(restored, (0, source_audio.shape[0] - restored.shape[0]))
+                restored = np.pad(
+                    restored, (0, source_audio.shape[0] - restored.shape[0])
+                )
             processed_channels.append(restored.astype(np.float32))
 
         mastered = np.stack(processed_channels, axis=1)

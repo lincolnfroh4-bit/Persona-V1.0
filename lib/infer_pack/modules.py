@@ -13,7 +13,6 @@ from lib.infer_pack import commons
 from lib.infer_pack.commons import init_weights, get_padding
 from lib.infer_pack.transforms import piecewise_rational_quadratic_transform
 
-
 LRELU_SLOPE = 0.1
 
 

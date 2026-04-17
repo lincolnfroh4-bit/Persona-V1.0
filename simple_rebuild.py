@@ -100,7 +100,9 @@ class RebuildFeatureBuilder:
         local = self.repo_root / ("ffmpeg.exe" if Path().anchor else "ffmpeg")
         return str(local) if local.exists() else "ffmpeg"
 
-    def load_audio(self, file_path: Path, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
+    def load_audio(
+        self, file_path: Path, sample_rate: int = 44100
+    ) -> Tuple[np.ndarray, int]:
         cleaned = str(file_path).strip().strip('"')
         out, _ = (
             ffmpeg.input(cleaned, threads=0)
@@ -116,7 +118,9 @@ class RebuildFeatureBuilder:
             raise RuntimeError(f"Could not decode audio from {file_path.name}.")
         return audio.reshape(-1, 2).copy(), sample_rate
 
-    def _to_analysis_mono(self, audio: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, int]:
+    def _to_analysis_mono(
+        self, audio: np.ndarray, sample_rate: int
+    ) -> Tuple[np.ndarray, int]:
         working = np.asarray(audio, dtype=np.float32)
         mono = working if working.ndim == 1 else working.mean(axis=1)
         if int(sample_rate) != int(self.analysis_sample_rate):
@@ -132,7 +136,9 @@ class RebuildFeatureBuilder:
             ).astype(np.float32, copy=False)
         return mono.astype(np.float32, copy=False), int(self.analysis_sample_rate)
 
-    def _estimate_pitch_track(self, mono: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _estimate_pitch_track(
+        self, mono: np.ndarray, sample_rate: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
         try:
             f0, _, _ = librosa.pyin(
                 mono,
@@ -162,7 +168,9 @@ class RebuildFeatureBuilder:
         ).astype(np.float32)
         return times, pitch
 
-    def _estimate_energy_track(self, mono: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _estimate_energy_track(
+        self, mono: np.ndarray, sample_rate: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
         rms = librosa.feature.rms(
             y=mono,
             frame_length=self.frame_length,
@@ -176,7 +184,9 @@ class RebuildFeatureBuilder:
         ).astype(np.float32)
         return times, np.asarray(rms, dtype=np.float32)
 
-    def _estimate_onset_track(self, mono: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _estimate_onset_track(
+        self, mono: np.ndarray, sample_rate: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
         onset = librosa.onset.onset_strength(
             y=mono,
             sr=sample_rate,
@@ -198,11 +208,17 @@ class RebuildFeatureBuilder:
     ) -> np.ndarray:
         if values.size == 0:
             return np.zeros(0, dtype=np.float32)
-        mask = (track_times >= float(start_seconds)) & (track_times <= float(end_seconds))
+        mask = (track_times >= float(start_seconds)) & (
+            track_times <= float(end_seconds)
+        )
         if np.any(mask):
             return np.asarray(values[mask], dtype=np.float32)
-        nearest_start = int(np.searchsorted(track_times, float(start_seconds), side="left"))
-        nearest_end = int(np.searchsorted(track_times, float(end_seconds), side="right"))
+        nearest_start = int(
+            np.searchsorted(track_times, float(start_seconds), side="left")
+        )
+        nearest_end = int(
+            np.searchsorted(track_times, float(end_seconds), side="right")
+        )
         nearest_start = max(0, min(nearest_start, len(values) - 1))
         nearest_end = max(nearest_start + 1, min(nearest_end, len(values)))
         return np.asarray(values[nearest_start:nearest_end], dtype=np.float32)
@@ -222,7 +238,9 @@ class RebuildFeatureBuilder:
             mono = working.reshape(-1)
         total_samples = int(mono.shape[0])
         segment_start = max(0, int(start_sample))
-        segment_end = total_samples if end_sample is None else min(total_samples, int(end_sample))
+        segment_end = (
+            total_samples if end_sample is None else min(total_samples, int(end_sample))
+        )
         if segment_end <= segment_start:
             segment_end = min(total_samples, segment_start + 1)
         segment = mono[segment_start:segment_end].astype(np.float32, copy=False)
@@ -230,23 +248,47 @@ class RebuildFeatureBuilder:
             segment = np.zeros(1, dtype=np.float32)
 
         analysis_mono, analysis_sr = self._to_analysis_mono(segment, sample_rate)
-        pitch_times, pitch_values = self._estimate_pitch_track(analysis_mono, analysis_sr)
-        energy_times, energy_values = self._estimate_energy_track(analysis_mono, analysis_sr)
-        onset_times, onset_values = self._estimate_onset_track(analysis_mono, analysis_sr)
+        pitch_times, pitch_values = self._estimate_pitch_track(
+            analysis_mono, analysis_sr
+        )
+        energy_times, energy_values = self._estimate_energy_track(
+            analysis_mono, analysis_sr
+        )
+        onset_times, onset_values = self._estimate_onset_track(
+            analysis_mono, analysis_sr
+        )
 
         voiced_pitch = pitch_values[pitch_values > 1.0]
         duration_seconds = float(segment.shape[0]) / float(max(sample_rate, 1))
         return {
             "duration_seconds": round(duration_seconds, 4),
-            "pitch_median_hz": round(float(np.median(voiced_pitch)) if voiced_pitch.size else 0.0, 3),
-            "pitch_p10_hz": round(float(np.percentile(voiced_pitch, 10)) if voiced_pitch.size else 0.0, 3),
-            "pitch_p90_hz": round(float(np.percentile(voiced_pitch, 90)) if voiced_pitch.size else 0.0, 3),
-            "pitch_mean_hz": round(float(np.mean(voiced_pitch)) if voiced_pitch.size else 0.0, 3),
-            "voiced_ratio": round(float(voiced_pitch.size / max(1, pitch_values.size)), 4),
-            "energy_mean": round(float(np.mean(energy_values)) if energy_values.size else 0.0, 6),
-            "energy_peak": round(float(np.max(energy_values)) if energy_values.size else 0.0, 6),
-            "onset_mean": round(float(np.mean(onset_values)) if onset_values.size else 0.0, 6),
-            "onset_peak": round(float(np.max(onset_values)) if onset_values.size else 0.0, 6),
+            "pitch_median_hz": round(
+                float(np.median(voiced_pitch)) if voiced_pitch.size else 0.0, 3
+            ),
+            "pitch_p10_hz": round(
+                float(np.percentile(voiced_pitch, 10)) if voiced_pitch.size else 0.0, 3
+            ),
+            "pitch_p90_hz": round(
+                float(np.percentile(voiced_pitch, 90)) if voiced_pitch.size else 0.0, 3
+            ),
+            "pitch_mean_hz": round(
+                float(np.mean(voiced_pitch)) if voiced_pitch.size else 0.0, 3
+            ),
+            "voiced_ratio": round(
+                float(voiced_pitch.size / max(1, pitch_values.size)), 4
+            ),
+            "energy_mean": round(
+                float(np.mean(energy_values)) if energy_values.size else 0.0, 6
+            ),
+            "energy_peak": round(
+                float(np.max(energy_values)) if energy_values.size else 0.0, 6
+            ),
+            "onset_mean": round(
+                float(np.mean(onset_values)) if onset_values.size else 0.0, 6
+            ),
+            "onset_peak": round(
+                float(np.max(onset_values)) if onset_values.size else 0.0, 6
+            ),
         }
 
     def analyze_aligned_audio(
@@ -269,21 +311,37 @@ class RebuildFeatureBuilder:
             )
 
         analysis_mono, analysis_sr = self._to_analysis_mono(audio, sample_rate)
-        pitch_times, pitch_values = self._estimate_pitch_track(analysis_mono, analysis_sr)
-        energy_times, energy_values = self._estimate_energy_track(analysis_mono, analysis_sr)
-        onset_times, onset_values = self._estimate_onset_track(analysis_mono, analysis_sr)
+        pitch_times, pitch_values = self._estimate_pitch_track(
+            analysis_mono, analysis_sr
+        )
+        energy_times, energy_values = self._estimate_energy_track(
+            analysis_mono, analysis_sr
+        )
+        onset_times, onset_values = self._estimate_onset_track(
+            analysis_mono, analysis_sr
+        )
 
         enriched_words: List[Dict[str, object]] = []
         for entry in sorted(
-            (dict(item) for item in word_scores if normalize_lyrics(str(item.get("word", "")))),
+            (
+                dict(item)
+                for item in word_scores
+                if normalize_lyrics(str(item.get("word", "")))
+            ),
             key=lambda item: int(item.get("index", 0)),
         ):
             start_seconds = float(entry.get("start", 0.0))
             end_seconds = max(start_seconds, float(entry.get("end", start_seconds)))
-            pitch_window = self._window_values(pitch_times, pitch_values, start_seconds, end_seconds)
+            pitch_window = self._window_values(
+                pitch_times, pitch_values, start_seconds, end_seconds
+            )
             voiced_pitch = pitch_window[pitch_window > 1.0]
-            energy_window = self._window_values(energy_times, energy_values, start_seconds, end_seconds)
-            onset_window = self._window_values(onset_times, onset_values, start_seconds, end_seconds)
+            energy_window = self._window_values(
+                energy_times, energy_values, start_seconds, end_seconds
+            )
+            onset_window = self._window_values(
+                onset_times, onset_values, start_seconds, end_seconds
+            )
             word = normalize_lyrics(str(entry.get("word", "")))
             enriched_words.append(
                 {
@@ -294,15 +352,33 @@ class RebuildFeatureBuilder:
                     "end": round(end_seconds, 4),
                     "duration_seconds": round(max(0.0, end_seconds - start_seconds), 4),
                     "similarity": round(float(entry.get("similarity", 0.0)), 2),
-                    "pitch_median_hz": round(float(np.median(voiced_pitch)) if voiced_pitch.size else 0.0, 3),
-                    "pitch_mean_hz": round(float(np.mean(voiced_pitch)) if voiced_pitch.size else 0.0, 3),
-                    "pitch_min_hz": round(float(np.min(voiced_pitch)) if voiced_pitch.size else 0.0, 3),
-                    "pitch_max_hz": round(float(np.max(voiced_pitch)) if voiced_pitch.size else 0.0, 3),
-                    "voiced_ratio": round(float(voiced_pitch.size / max(1, pitch_window.size)), 4),
-                    "energy_mean": round(float(np.mean(energy_window)) if energy_window.size else 0.0, 6),
-                    "energy_peak": round(float(np.max(energy_window)) if energy_window.size else 0.0, 6),
-                    "onset_mean": round(float(np.mean(onset_window)) if onset_window.size else 0.0, 6),
-                    "onset_peak": round(float(np.max(onset_window)) if onset_window.size else 0.0, 6),
+                    "pitch_median_hz": round(
+                        float(np.median(voiced_pitch)) if voiced_pitch.size else 0.0, 3
+                    ),
+                    "pitch_mean_hz": round(
+                        float(np.mean(voiced_pitch)) if voiced_pitch.size else 0.0, 3
+                    ),
+                    "pitch_min_hz": round(
+                        float(np.min(voiced_pitch)) if voiced_pitch.size else 0.0, 3
+                    ),
+                    "pitch_max_hz": round(
+                        float(np.max(voiced_pitch)) if voiced_pitch.size else 0.0, 3
+                    ),
+                    "voiced_ratio": round(
+                        float(voiced_pitch.size / max(1, pitch_window.size)), 4
+                    ),
+                    "energy_mean": round(
+                        float(np.mean(energy_window)) if energy_window.size else 0.0, 6
+                    ),
+                    "energy_peak": round(
+                        float(np.max(energy_window)) if energy_window.size else 0.0, 6
+                    ),
+                    "onset_mean": round(
+                        float(np.mean(onset_window)) if onset_window.size else 0.0, 6
+                    ),
+                    "onset_peak": round(
+                        float(np.max(onset_window)) if onset_window.size else 0.0, 6
+                    ),
                 }
             )
 
@@ -325,21 +401,44 @@ class RebuildFeatureBuilder:
         voiced_all = pitch_values[pitch_values > 1.0]
         style_summary = {
             "source_name": source_name,
-            "duration_seconds": round(float(audio.shape[0]) / float(max(sample_rate, 1)), 3),
+            "duration_seconds": round(
+                float(audio.shape[0]) / float(max(sample_rate, 1)), 3
+            ),
             "lyric_word_count": len(lyrics_to_words(lyrics)),
             "aligned_word_count": len(enriched_words),
             "phrase_count": len(phrase_groups),
-            "pitch_median_hz": round(float(np.median(voiced_all)) if voiced_all.size else 0.0, 3),
-            "pitch_p10_hz": round(float(np.percentile(voiced_all, 10)) if voiced_all.size else 0.0, 3),
-            "pitch_p90_hz": round(float(np.percentile(voiced_all, 90)) if voiced_all.size else 0.0, 3),
-            "energy_mean": round(float(np.mean(energy_values)) if energy_values.size else 0.0, 6),
-            "energy_p90": round(float(np.percentile(energy_values, 90)) if energy_values.size else 0.0, 6),
-            "onset_mean": round(float(np.mean(onset_values)) if onset_values.size else 0.0, 6),
-            "voiced_ratio": round(float(voiced_all.size / max(1, pitch_values.size)), 4),
+            "pitch_median_hz": round(
+                float(np.median(voiced_all)) if voiced_all.size else 0.0, 3
+            ),
+            "pitch_p10_hz": round(
+                float(np.percentile(voiced_all, 10)) if voiced_all.size else 0.0, 3
+            ),
+            "pitch_p90_hz": round(
+                float(np.percentile(voiced_all, 90)) if voiced_all.size else 0.0, 3
+            ),
+            "energy_mean": round(
+                float(np.mean(energy_values)) if energy_values.size else 0.0, 6
+            ),
+            "energy_p90": round(
+                float(np.percentile(energy_values, 90)) if energy_values.size else 0.0,
+                6,
+            ),
+            "onset_mean": round(
+                float(np.mean(onset_values)) if onset_values.size else 0.0, 6
+            ),
+            "voiced_ratio": round(
+                float(voiced_all.size / max(1, pitch_values.size)), 4
+            ),
             "mean_word_duration": round(
-                float(np.mean([float(item["duration_seconds"]) for item in enriched_words]))
-                if enriched_words
-                else 0.0,
+                (
+                    float(
+                        np.mean(
+                            [float(item["duration_seconds"]) for item in enriched_words]
+                        )
+                    )
+                    if enriched_words
+                    else 0.0
+                ),
                 4,
             ),
         }
@@ -366,17 +465,30 @@ class RebuildFeatureBuilder:
         total_samples = int(mono.shape[0])
         duration_seconds = float(total_samples) / float(max(sample_rate, 1))
 
-        def summarize_raw_window(start_seconds: float, end_seconds: float) -> Dict[str, float]:
-            start_sample = max(0, min(total_samples, int(round(float(start_seconds) * sample_rate))))
-            end_sample = max(start_sample + 1, min(total_samples, int(round(float(end_seconds) * sample_rate))))
+        def summarize_raw_window(
+            start_seconds: float, end_seconds: float
+        ) -> Dict[str, float]:
+            start_sample = max(
+                0, min(total_samples, int(round(float(start_seconds) * sample_rate)))
+            )
+            end_sample = max(
+                start_sample + 1,
+                min(total_samples, int(round(float(end_seconds) * sample_rate))),
+            )
             segment = mono[start_sample:end_sample].astype(np.float32, copy=False)
             if segment.size == 0:
                 segment = np.zeros(1, dtype=np.float32)
             rms = float(np.sqrt(np.mean(np.square(segment)))) if segment.size else 0.0
-            diffs = np.abs(np.diff(segment)) if segment.size > 1 else np.zeros(1, dtype=np.float32)
+            diffs = (
+                np.abs(np.diff(segment))
+                if segment.size > 1
+                else np.zeros(1, dtype=np.float32)
+            )
             return {
                 "energy_mean": round(rms, 6),
-                "energy_peak": round(float(np.max(np.abs(segment))) if segment.size else 0.0, 6),
+                "energy_peak": round(
+                    float(np.max(np.abs(segment))) if segment.size else 0.0, 6
+                ),
                 "onset_mean": round(float(np.mean(diffs)) if diffs.size else 0.0, 6),
                 "onset_peak": round(float(np.max(diffs)) if diffs.size else 0.0, 6),
             }
@@ -384,7 +496,11 @@ class RebuildFeatureBuilder:
         normalized_words = [
             dict(item)
             for item in sorted(
-                (dict(entry) for entry in word_scores if normalize_lyrics(str(entry.get("word", "")))),
+                (
+                    dict(entry)
+                    for entry in word_scores
+                    if normalize_lyrics(str(entry.get("word", "")))
+                ),
                 key=lambda item: int(item.get("index", 0)),
             )
         ]
@@ -425,8 +541,14 @@ class RebuildFeatureBuilder:
             sampled_pitch_values: List[float] = []
             sampled_pitch_by_index: Dict[int, float] = {}
             for word in sampled:
-                start_sample = max(0, min(total_samples, int(round(float(word["start"]) * sample_rate))))
-                end_sample = max(start_sample + 1, min(total_samples, int(round(float(word["end"]) * sample_rate))))
+                start_sample = max(
+                    0,
+                    min(total_samples, int(round(float(word["start"]) * sample_rate))),
+                )
+                end_sample = max(
+                    start_sample + 1,
+                    min(total_samples, int(round(float(word["end"]) * sample_rate))),
+                )
                 segment = mono[start_sample:end_sample]
                 summary = self.summarize_segment(segment, sample_rate)
                 pitch_value = float(summary.get("pitch_median_hz", 0.0))
@@ -434,7 +556,9 @@ class RebuildFeatureBuilder:
                     sampled_pitch_values.append(pitch_value)
                     sampled_pitch_by_index[int(word["index"])] = pitch_value
             for word in enriched_words:
-                sampled_pitch = float(sampled_pitch_by_index.get(int(word["index"]), 0.0))
+                sampled_pitch = float(
+                    sampled_pitch_by_index.get(int(word["index"]), 0.0)
+                )
                 if sampled_pitch > 0.0:
                     word["pitch_median_hz"] = round(sampled_pitch, 3)
                     word["pitch_mean_hz"] = round(sampled_pitch, 3)
@@ -476,17 +600,46 @@ class RebuildFeatureBuilder:
             "lyric_word_count": len(lyrics_to_words(lyrics)),
             "aligned_word_count": len(enriched_words),
             "phrase_count": len(phrase_groups),
-            "pitch_median_hz": round(float(np.median(sampled_pitch_values)) if sampled_pitch_values else 0.0, 3),
-            "pitch_p10_hz": round(float(np.percentile(sampled_pitch_values, 10)) if sampled_pitch_values else 0.0, 3),
-            "pitch_p90_hz": round(float(np.percentile(sampled_pitch_values, 90)) if sampled_pitch_values else 0.0, 3),
-            "energy_mean": round(float(np.mean(clip_energy)) if clip_energy else 0.0, 6),
-            "energy_p90": round(float(np.percentile(clip_energy, 90)) if clip_energy else 0.0, 6),
+            "pitch_median_hz": round(
+                float(np.median(sampled_pitch_values)) if sampled_pitch_values else 0.0,
+                3,
+            ),
+            "pitch_p10_hz": round(
+                (
+                    float(np.percentile(sampled_pitch_values, 10))
+                    if sampled_pitch_values
+                    else 0.0
+                ),
+                3,
+            ),
+            "pitch_p90_hz": round(
+                (
+                    float(np.percentile(sampled_pitch_values, 90))
+                    if sampled_pitch_values
+                    else 0.0
+                ),
+                3,
+            ),
+            "energy_mean": round(
+                float(np.mean(clip_energy)) if clip_energy else 0.0, 6
+            ),
+            "energy_p90": round(
+                float(np.percentile(clip_energy, 90)) if clip_energy else 0.0, 6
+            ),
             "onset_mean": round(float(np.mean(clip_onset)) if clip_onset else 0.0, 6),
-            "voiced_ratio": round(float(len(sampled_pitch_values) / max(1, len(enriched_words))), 4),
+            "voiced_ratio": round(
+                float(len(sampled_pitch_values) / max(1, len(enriched_words))), 4
+            ),
             "mean_word_duration": round(
-                float(np.mean([float(item["duration_seconds"]) for item in enriched_words]))
-                if enriched_words
-                else 0.0,
+                (
+                    float(
+                        np.mean(
+                            [float(item["duration_seconds"]) for item in enriched_words]
+                        )
+                    )
+                    if enriched_words
+                    else 0.0
+                ),
                 4,
             ),
             "analysis_mode": "fast-long-form",
@@ -500,7 +653,9 @@ class RebuildFeatureBuilder:
             "phrase_performance": phrase_groups,
         }
 
-    def _summarize_phrase_group(self, words: List[Dict[str, object]]) -> Dict[str, object]:
+    def _summarize_phrase_group(
+        self, words: List[Dict[str, object]]
+    ) -> Dict[str, object]:
         if not words:
             return {"words": [], "phrase": ""}
         pitch_values = [
@@ -519,9 +674,15 @@ class RebuildFeatureBuilder:
                 float(words[-1].get("end", 0.0)) - float(words[0].get("start", 0.0)),
                 4,
             ),
-            "pitch_median_hz": round(float(np.median(pitch_values)) if pitch_values else 0.0, 3),
-            "energy_mean": round(float(np.mean(energy_values)) if energy_values else 0.0, 6),
-            "onset_mean": round(float(np.mean(onset_values)) if onset_values else 0.0, 6),
+            "pitch_median_hz": round(
+                float(np.median(pitch_values)) if pitch_values else 0.0, 3
+            ),
+            "energy_mean": round(
+                float(np.mean(energy_values)) if energy_values else 0.0, 6
+            ),
+            "onset_mean": round(
+                float(np.mean(onset_values)) if onset_values else 0.0, 6
+            ),
         }
 
     def build_package_profile(
@@ -536,7 +697,8 @@ class RebuildFeatureBuilder:
         clip_summaries = [
             dict(item.get("style_summary", {}))
             for item in clip_analyses
-            if isinstance(item, dict) and isinstance(item.get("style_summary", {}), dict)
+            if isinstance(item, dict)
+            and isinstance(item.get("style_summary", {}), dict)
         ]
         clip_pitch = [
             float(item.get("pitch_median_hz", 0.0))
@@ -569,12 +731,24 @@ class RebuildFeatureBuilder:
             "reference_word_count": len(word_entries),
             "reference_phrase_count": len(phrase_entries),
             "voice_style": {
-                "pitch_median_hz": round(float(np.median(clip_pitch)) if clip_pitch else 0.0, 3),
-                "pitch_p10_hz": round(float(np.percentile(clip_pitch, 10)) if clip_pitch else 0.0, 3),
-                "pitch_p90_hz": round(float(np.percentile(clip_pitch, 90)) if clip_pitch else 0.0, 3),
-                "energy_mean": round(float(np.mean(clip_energy)) if clip_energy else 0.0, 6),
-                "mean_word_duration": round(float(np.mean(word_durations)) if word_durations else 0.0, 4),
-                "mean_phrase_duration": round(float(np.mean(phrase_durations)) if phrase_durations else 0.0, 4),
+                "pitch_median_hz": round(
+                    float(np.median(clip_pitch)) if clip_pitch else 0.0, 3
+                ),
+                "pitch_p10_hz": round(
+                    float(np.percentile(clip_pitch, 10)) if clip_pitch else 0.0, 3
+                ),
+                "pitch_p90_hz": round(
+                    float(np.percentile(clip_pitch, 90)) if clip_pitch else 0.0, 3
+                ),
+                "energy_mean": round(
+                    float(np.mean(clip_energy)) if clip_energy else 0.0, 6
+                ),
+                "mean_word_duration": round(
+                    float(np.mean(word_durations)) if word_durations else 0.0, 4
+                ),
+                "mean_phrase_duration": round(
+                    float(np.mean(phrase_durations)) if phrase_durations else 0.0, 4
+                ),
             },
             "training_usage": {
                 "uses_lyrics": True,
@@ -593,12 +767,24 @@ class RebuildFeatureBuilder:
         package_label: str,
         top_k: int = 3,
     ) -> Dict[str, object]:
-        word_entries = [dict(entry) for entry in reference_bank.get("words", []) if isinstance(entry, dict)]
-        phrase_entries = [dict(entry) for entry in reference_bank.get("phrases", []) if isinstance(entry, dict)]
+        word_entries = [
+            dict(entry)
+            for entry in reference_bank.get("words", [])
+            if isinstance(entry, dict)
+        ]
+        phrase_entries = [
+            dict(entry)
+            for entry in reference_bank.get("phrases", [])
+            if isinstance(entry, dict)
+        ]
         plan_phrases: List[Dict[str, object]] = []
         for phrase in guide_analysis.get("phrase_performance", []):
             phrase_text = normalize_lyrics(str(phrase.get("phrase", "")))
-            phrase_words = [normalize_lyrics(word) for word in phrase_text.split(" ") if normalize_lyrics(word)]
+            phrase_words = [
+                normalize_lyrics(word)
+                for word in phrase_text.split(" ")
+                if normalize_lyrics(word)
+            ]
             phrase_candidates: List[Dict[str, object]] = []
             for entry in phrase_entries:
                 score = self._reference_match_score(
@@ -618,7 +804,11 @@ class RebuildFeatureBuilder:
                         "target_pitch_shift_semitones": round(
                             self._pitch_shift_semitones(
                                 float(phrase.get("pitch_median_hz", 0.0)),
-                                float(entry.get("performance", {}).get("pitch_median_hz", 0.0)),
+                                float(
+                                    entry.get("performance", {}).get(
+                                        "pitch_median_hz", 0.0
+                                    )
+                                ),
                             ),
                             3,
                         ),
@@ -631,7 +821,9 @@ class RebuildFeatureBuilder:
                         ),
                     }
                 )
-            phrase_candidates.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
+            phrase_candidates.sort(
+                key=lambda item: float(item.get("score", 0.0)), reverse=True
+            )
             plan_phrases.append(
                 {
                     "phrase": phrase_text,
@@ -669,7 +861,11 @@ class RebuildFeatureBuilder:
                         "target_pitch_shift_semitones": round(
                             self._pitch_shift_semitones(
                                 float(word.get("pitch_median_hz", 0.0)),
-                                float(entry.get("performance", {}).get("pitch_median_hz", 0.0)),
+                                float(
+                                    entry.get("performance", {}).get(
+                                        "pitch_median_hz", 0.0
+                                    )
+                                ),
                             ),
                             3,
                         ),
@@ -682,7 +878,9 @@ class RebuildFeatureBuilder:
                         ),
                     }
                 )
-            word_candidates.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
+            word_candidates.sort(
+                key=lambda item: float(item.get("score", 0.0)), reverse=True
+            )
             plan_words.append(
                 {
                     "index": int(word.get("index", 0)),
@@ -706,8 +904,12 @@ class RebuildFeatureBuilder:
             "summary": {
                 "phrase_plan_count": len(plan_phrases),
                 "word_plan_count": len(plan_words),
-                "phrases_with_matches": int(sum(1 for item in plan_phrases if item["reference_candidates"])),
-                "words_with_matches": int(sum(1 for item in plan_words if item["reference_candidates"])),
+                "phrases_with_matches": int(
+                    sum(1 for item in plan_phrases if item["reference_candidates"])
+                ),
+                "words_with_matches": int(
+                    sum(1 for item in plan_words if item["reference_candidates"])
+                ),
             },
         }
 
@@ -754,7 +956,9 @@ class RebuildFeatureBuilder:
                 for word in guide_words
                 for unit in approximate_pronunciation_units(word)
             }
-            entry_units = {str(unit) for unit in reference_entry.get("units", []) if str(unit)}
+            entry_units = {
+                str(unit) for unit in reference_entry.get("units", []) if str(unit)
+            }
             union = len(guide_units | entry_units)
             if union:
                 score += 40.0 * (len(guide_units & entry_units) / float(union))

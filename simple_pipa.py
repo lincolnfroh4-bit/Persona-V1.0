@@ -16,7 +16,11 @@ import soundfile as sf
 
 from simple_rebuild import RebuildFeatureBuilder
 from simple_svs import GuidedSVSManager
-from simple_touchup import LetterAwarePronunciationScorer, lyrics_to_words, normalize_lyrics
+from simple_touchup import (
+    LetterAwarePronunciationScorer,
+    lyrics_to_words,
+    normalize_lyrics,
+)
 
 
 def _utc_now_iso() -> str:
@@ -152,7 +156,9 @@ class PIPAModelStore:
         local = self.repo_root / "ffmpeg.exe"
         return str(local) if local.exists() else "ffmpeg"
 
-    def _load_audio(self, file_path: Path, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
+    def _load_audio(
+        self, file_path: Path, sample_rate: int = 44100
+    ) -> Tuple[np.ndarray, int]:
         cleaned = str(file_path).strip().strip('"')
         out, _ = (
             ffmpeg.input(cleaned, threads=0)
@@ -185,14 +191,21 @@ class PIPAModelStore:
             label = str(manifest.get("label", bundle_id.replace("_", " "))).strip()
             rvc_model_name = str(manifest.get("rvc_model_name", "")).strip()
             package_mode = str(
-                manifest.get("package_mode", manifest.get("backbone", {}).get("output_mode", "pipa-full"))
+                manifest.get(
+                    "package_mode",
+                    manifest.get("backbone", {}).get("output_mode", "pipa-full"),
+                )
                 or "pipa-full"
             ).strip()
-            report_path = str(manifest.get("guided_regeneration_report_path", "") or "").strip()
+            report_path = str(
+                manifest.get("guided_regeneration_report_path", "") or ""
+            ).strip()
             report_payload: Dict[str, object] = {}
             if report_path and Path(report_path).exists():
                 try:
-                    loaded_report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+                    loaded_report = json.loads(
+                        Path(report_path).read_text(encoding="utf-8")
+                    )
                     if isinstance(loaded_report, dict):
                         report_payload = loaded_report
                 except Exception:
@@ -245,7 +258,11 @@ class PIPAModelStore:
                     ),
                     "guided_vocoder_latest_path": str(
                         manifest.get("guided_vocoder_latest_path", "")
-                        or ((report_payload.get("guided_vocoder", {}) or {}).get("latest_checkpoint_path", ""))
+                        or (
+                            (report_payload.get("guided_vocoder", {}) or {}).get(
+                                "latest_checkpoint_path", ""
+                            )
+                        )
                         or ""
                     ),
                     "guided_vocoder_config_path": str(
@@ -258,18 +275,21 @@ class PIPAModelStore:
                         manifest.get("guided_regeneration_preview_path", "") or ""
                     ),
                     "guided_regeneration_target_preview_path": str(
-                        manifest.get("guided_regeneration_target_preview_path", "") or ""
+                        manifest.get("guided_regeneration_target_preview_path", "")
+                        or ""
                     ),
                     "has_guided_regeneration": bool(
                         str(manifest.get("guided_regeneration_path", "") or "")
                     ),
                     "alignment_tolerance": str(
-                        manifest.get("pronunciation_strategy", {})
-                        .get("alignment_tolerance", "balanced")
+                        manifest.get("pronunciation_strategy", {}).get(
+                            "alignment_tolerance", "balanced"
+                        )
                     ),
                     "phoneme_mode": str(
-                        manifest.get("pronunciation_strategy", {})
-                        .get("unit_mode", "approx-pronunciation")
+                        manifest.get("pronunciation_strategy", {}).get(
+                            "unit_mode", "approx-pronunciation"
+                        )
                     ),
                     "transcripted_clips": int(
                         manifest.get("dataset", {}).get("matched_audio_files", 0)
@@ -280,10 +300,18 @@ class PIPAModelStore:
                     "reference_phrase_count": int(
                         manifest.get("dataset", {}).get("reference_phrase_count", 0)
                     ),
-                    "guided_regeneration_best_epoch": int(report_payload.get("best_epoch", 0)),
-                    "guided_regeneration_last_epoch": int(report_payload.get("last_epoch", 0)),
-                    "guided_regeneration_best_val_total": float(report_payload.get("best_val_total", 0.0)),
-                    "guided_regeneration_quality_summary": str(report_payload.get("quality_summary", "") or ""),
+                    "guided_regeneration_best_epoch": int(
+                        report_payload.get("best_epoch", 0)
+                    ),
+                    "guided_regeneration_last_epoch": int(
+                        report_payload.get("last_epoch", 0)
+                    ),
+                    "guided_regeneration_best_val_total": float(
+                        report_payload.get("best_val_total", 0.0)
+                    ),
+                    "guided_regeneration_quality_summary": str(
+                        report_payload.get("quality_summary", "") or ""
+                    ),
                 }
             )
         return bundles
@@ -317,9 +345,7 @@ class PIPAModelStore:
         if not isinstance(loaded, dict):
             return {"words": [], "phrases": []}
         words = [
-            dict(entry)
-            for entry in loaded.get("words", [])
-            if isinstance(entry, dict)
+            dict(entry) for entry in loaded.get("words", []) if isinstance(entry, dict)
         ]
         phrases = [
             dict(entry)
@@ -342,13 +368,17 @@ class PIPAModelStore:
     ) -> List[Dict[str, object]]:
         index_payload = self.load_reference_index(reference_bank_path)
         normalized_phrase = normalize_lyrics(phrase_text)
-        normalized_words = [normalize_lyrics(word) for word in words if normalize_lyrics(word)]
+        normalized_words = [
+            normalize_lyrics(word) for word in words if normalize_lyrics(word)
+        ]
 
         ranked: List[Tuple[float, Dict[str, object]]] = []
         for entry in index_payload.get("phrases", []):
             entry_phrase = normalize_lyrics(str(entry.get("phrase", "")))
             if entry_phrase and entry_phrase == normalized_phrase:
-                ranked.append((220.0 + float(entry.get("similarity", 0.0)), dict(entry)))
+                ranked.append(
+                    (220.0 + float(entry.get("similarity", 0.0)), dict(entry))
+                )
 
         if len(normalized_words) == 1:
             target_word = normalized_words[0]
@@ -361,13 +391,19 @@ class PIPAModelStore:
                 if entry_word == target_word:
                     score = 180.0 + float(entry.get("similarity", 0.0))
                 else:
-                    entry_units = [str(unit) for unit in entry.get("units", []) if str(unit)]
+                    entry_units = [
+                        str(unit) for unit in entry.get("units", []) if str(unit)
+                    ]
                     overlap = len(set(target_units) & set(entry_units))
                     union = len(set(target_units) | set(entry_units))
                     if union:
                         ratio = overlap / float(union)
                         if ratio >= 0.65:
-                            score = 110.0 + (ratio * 40.0) + float(entry.get("similarity", 0.0))
+                            score = (
+                                110.0
+                                + (ratio * 40.0)
+                                + float(entry.get("similarity", 0.0))
+                            )
                 if score > 0.0:
                     ranked.append((score, dict(entry)))
 
@@ -390,7 +426,9 @@ class PIPAModelStore:
         plan_paths: Optional[List[Path]],
         transcript_paths: Optional[List[Path]] = None,
     ) -> Tuple[Dict[str, object], Optional[Path]]:
-        candidates: List[Path] = [Path(path) for path in (plan_paths or []) if Path(path).exists()]
+        candidates: List[Path] = [
+            Path(path) for path in (plan_paths or []) if Path(path).exists()
+        ]
         if not candidates:
             for transcript_path in transcript_paths or []:
                 path = Path(transcript_path)
@@ -446,11 +484,20 @@ class PIPAModelStore:
                 base_vocals.append(normalized)
 
         paired_songs: List[Dict[str, object]] = []
-        raw_songs = payload.get("paired_songs") or payload.get("songs") or payload.get("pairs") or []
+        raw_songs = (
+            payload.get("paired_songs")
+            or payload.get("songs")
+            or payload.get("pairs")
+            or []
+        )
         for song_index, raw_song in enumerate(raw_songs, start=1):
             if not isinstance(raw_song, dict):
                 continue
-            target_block = raw_song.get("target") if isinstance(raw_song.get("target"), dict) else {}
+            target_block = (
+                raw_song.get("target")
+                if isinstance(raw_song.get("target"), dict)
+                else {}
+            )
             target_file = (
                 raw_song.get("target_file")
                 or target_block.get("file")
@@ -482,7 +529,11 @@ class PIPAModelStore:
             if str(target_file).strip() and guides:
                 paired_songs.append(
                     {
-                        "song_id": str(raw_song.get("song_id") or raw_song.get("id") or f"song_{song_index:02d}"),
+                        "song_id": str(
+                            raw_song.get("song_id")
+                            or raw_song.get("id")
+                            or f"song_{song_index:02d}"
+                        ),
                         "lyrics": lyrics,
                         "target_file": str(target_file).strip(),
                         "guides": guides,
@@ -498,12 +549,17 @@ class PIPAModelStore:
     def _build_audio_lookup(self, audio_paths: List[Path]) -> Dict[str, Path]:
         lookup: Dict[str, Path] = {}
         for audio_path in audio_paths:
-            for key in {normalize_match_key(audio_path.name), normalize_match_key(audio_path.stem)}:
+            for key in {
+                normalize_match_key(audio_path.name),
+                normalize_match_key(audio_path.stem),
+            }:
                 if key:
                     lookup[key] = audio_path
         return lookup
 
-    def _resolve_audio_path(self, audio_lookup: Dict[str, Path], file_name: str) -> Optional[Path]:
+    def _resolve_audio_path(
+        self, audio_lookup: Dict[str, Path], file_name: str
+    ) -> Optional[Path]:
         cleaned = str(file_name or "").strip()
         if not cleaned:
             return None
@@ -553,7 +609,9 @@ class PIPAModelStore:
         base_specs = list(training_plan.get("base_vocals") or [])
         paired_specs = list(training_plan.get("paired_songs") or [])
         if not base_specs and not paired_specs:
-            raise RuntimeError("Training plan did not include any base vocals or paired songs.")
+            raise RuntimeError(
+                "Training plan did not include any base vocals or paired songs."
+            )
 
         threshold_config = self.ALIGNMENT_THRESHOLDS.get(
             str(alignment_tolerance or "balanced").strip().lower(),
@@ -567,7 +625,10 @@ class PIPAModelStore:
         guided_svs_entries: List[object] = []
         base_reports: List[Dict[str, object]] = []
         paired_song_reports: List[Dict[str, object]] = []
-        total_units = max(1, len(base_specs) + sum(len(song.get("guides", [])) for song in paired_specs))
+        total_units = max(
+            1,
+            len(base_specs) + sum(len(song.get("guides", [])) for song in paired_specs),
+        )
         processed_units = 0
 
         def ensure_running() -> None:
@@ -579,9 +640,13 @@ class PIPAModelStore:
 
         for base_index, base_spec in enumerate(base_specs, start=1):
             ensure_running()
-            base_path = self._resolve_audio_path(audio_lookup, str(base_spec.get("file", "")))
+            base_path = self._resolve_audio_path(
+                audio_lookup, str(base_spec.get("file", ""))
+            )
             if base_path is None:
-                raise RuntimeError(f"Base vocal file '{base_spec.get('file', '')}' was not uploaded.")
+                raise RuntimeError(
+                    f"Base vocal file '{base_spec.get('file', '')}' was not uploaded."
+                )
             update_status(
                 "persona-base",
                 f"Preparing base voice clip {base_index}/{len(base_specs)}: {base_path.name}",
@@ -590,7 +655,11 @@ class PIPAModelStore:
             )
             audio, sample_rate = self._load_audio(base_path, sample_rate=44100)
             clip_lyrics = normalize_lyrics(
-                str(base_spec.get("lyrics", "") or matched_transcripts.get(str(base_path.resolve()), "") or "")
+                str(
+                    base_spec.get("lyrics", "")
+                    or matched_transcripts.get(str(base_path.resolve()), "")
+                    or ""
+                )
             )
             if clip_lyrics:
                 analysis, analysis_metadata = self._analyze_clip_pronunciation(
@@ -603,11 +672,17 @@ class PIPAModelStore:
                         "persona-base",
                         message,
                         detail,
-                        progress_at(6, 8, (processed_units + float(fraction)) / float(total_units)),
+                        progress_at(
+                            6,
+                            8,
+                            (processed_units + float(fraction)) / float(total_units),
+                        ),
                     ),
                     cancel_event=cancel_event,
                 )
-                scored_words = [dict(entry) for entry in analysis.get("word_scores", [])]
+                scored_words = [
+                    dict(entry) for entry in analysis.get("word_scores", [])
+                ]
                 rebuild_clip_analysis = self.rebuild_builder.analyze_aligned_audio(
                     audio=audio,
                     sample_rate=sample_rate,
@@ -646,10 +721,14 @@ class PIPAModelStore:
                         "audio_file": base_path.name,
                         "transcript": clip_lyrics,
                         "used_for_profile": True,
-                        "duration_seconds": round(float(audio.shape[0]) / float(sample_rate), 3),
+                        "duration_seconds": round(
+                            float(audio.shape[0]) / float(sample_rate), 3
+                        ),
                         "word_similarity": float(analysis.get("similarity_score", 0.0)),
                         "word_count": len(scored_words),
-                        "analysis_strategy": str(analysis_metadata.get("strategy", "full-audio")),
+                        "analysis_strategy": str(
+                            analysis_metadata.get("strategy", "full-audio")
+                        ),
                         "dataset_role": "base-vocal",
                     }
                 )
@@ -664,7 +743,11 @@ class PIPAModelStore:
                         "persona-base",
                         message,
                         detail,
-                        progress_at(6, 8, (processed_units + float(fraction)) / float(total_units)),
+                        progress_at(
+                            6,
+                            8,
+                            (processed_units + float(fraction)) / float(total_units),
+                        ),
                     ),
                     cancel_event=cancel_event,
                 )
@@ -680,14 +763,24 @@ class PIPAModelStore:
 
         for song_index, song_spec in enumerate(paired_specs, start=1):
             ensure_running()
-            target_path = self._resolve_audio_path(audio_lookup, str(song_spec.get("target_file", "")))
+            target_path = self._resolve_audio_path(
+                audio_lookup, str(song_spec.get("target_file", ""))
+            )
             if target_path is None:
-                raise RuntimeError(f"Target song file '{song_spec.get('target_file', '')}' was not uploaded.")
+                raise RuntimeError(
+                    f"Target song file '{song_spec.get('target_file', '')}' was not uploaded."
+                )
             song_lyrics = normalize_lyrics(
-                str(song_spec.get("lyrics", "") or matched_transcripts.get(str(target_path.resolve()), "") or "")
+                str(
+                    song_spec.get("lyrics", "")
+                    or matched_transcripts.get(str(target_path.resolve()), "")
+                    or ""
+                )
             )
             if not song_lyrics:
-                raise RuntimeError(f"Paired song '{song_spec.get('song_id', song_index)}' is missing lyrics.")
+                raise RuntimeError(
+                    f"Paired song '{song_spec.get('song_id', song_index)}' is missing lyrics."
+                )
 
             update_status(
                 "persona-paired",
@@ -696,21 +789,30 @@ class PIPAModelStore:
                 progress_at(14, 12, processed_units / float(total_units)),
             )
             target_audio, sample_rate = self._load_audio(target_path, sample_rate=44100)
-            target_analysis, target_analysis_metadata = self._analyze_clip_pronunciation(
-                scorer=scorer,
-                audio=target_audio,
-                sample_rate=sample_rate,
-                clip_text=song_lyrics,
-                clip_name=target_path.name,
-                progress_callback=lambda fraction, message, detail: update_status(
-                    "persona-paired",
-                    message,
-                    detail,
-                    progress_at(14, 12, (processed_units + (float(fraction) * 0.35)) / float(total_units)),
-                ),
-                cancel_event=cancel_event,
+            target_analysis, target_analysis_metadata = (
+                self._analyze_clip_pronunciation(
+                    scorer=scorer,
+                    audio=target_audio,
+                    sample_rate=sample_rate,
+                    clip_text=song_lyrics,
+                    clip_name=target_path.name,
+                    progress_callback=lambda fraction, message, detail: update_status(
+                        "persona-paired",
+                        message,
+                        detail,
+                        progress_at(
+                            14,
+                            12,
+                            (processed_units + (float(fraction) * 0.35))
+                            / float(total_units),
+                        ),
+                    ),
+                    cancel_event=cancel_event,
+                )
             )
-            target_scored_words = [dict(entry) for entry in target_analysis.get("word_scores", [])]
+            target_scored_words = [
+                dict(entry) for entry in target_analysis.get("word_scores", [])
+            ]
             rebuild_clip_analysis = self.rebuild_builder.analyze_aligned_audio(
                 audio=target_audio,
                 sample_rate=sample_rate,
@@ -749,10 +851,16 @@ class PIPAModelStore:
                     "audio_file": target_path.name,
                     "transcript": song_lyrics,
                     "used_for_profile": True,
-                    "duration_seconds": round(float(target_audio.shape[0]) / float(sample_rate), 3),
-                    "word_similarity": float(target_analysis.get("similarity_score", 0.0)),
+                    "duration_seconds": round(
+                        float(target_audio.shape[0]) / float(sample_rate), 3
+                    ),
+                    "word_similarity": float(
+                        target_analysis.get("similarity_score", 0.0)
+                    ),
                     "word_count": len(target_scored_words),
-                    "analysis_strategy": str(target_analysis_metadata.get("strategy", "full-audio")),
+                    "analysis_strategy": str(
+                        target_analysis_metadata.get("strategy", "full-audio")
+                    ),
                     "dataset_role": "paired-target",
                     "song_id": str(song_spec.get("song_id", "")),
                 }
@@ -764,29 +872,42 @@ class PIPAModelStore:
                 "lyrics_word_count": len(lyrics_to_words(song_lyrics)),
                 "guide_reports": [],
             }
-            for guide_index, guide_spec in enumerate(song_spec.get("guides", []), start=1):
+            for guide_index, guide_spec in enumerate(
+                song_spec.get("guides", []), start=1
+            ):
                 ensure_running()
-                guide_path = self._resolve_audio_path(audio_lookup, str(guide_spec.get("file", "")))
+                guide_path = self._resolve_audio_path(
+                    audio_lookup, str(guide_spec.get("file", ""))
+                )
                 if guide_path is None:
                     raise RuntimeError(
                         f"De-personafied guide '{guide_spec.get('file', '')}' was not uploaded for {song_report['song_id']}."
                     )
                 guide_audio, _ = self._load_audio(guide_path, sample_rate=sample_rate)
-                guide_analysis, guide_analysis_metadata = self._analyze_clip_pronunciation(
-                    scorer=scorer,
-                    audio=guide_audio,
-                    sample_rate=sample_rate,
-                    clip_text=song_lyrics,
-                    clip_name=guide_path.name,
-                    progress_callback=lambda fraction, message, detail: update_status(
-                        "persona-paired",
-                        message,
-                        detail,
-                        progress_at(14, 12, (processed_units + float(fraction)) / float(total_units)),
-                    ),
-                    cancel_event=cancel_event,
+                guide_analysis, guide_analysis_metadata = (
+                    self._analyze_clip_pronunciation(
+                        scorer=scorer,
+                        audio=guide_audio,
+                        sample_rate=sample_rate,
+                        clip_text=song_lyrics,
+                        clip_name=guide_path.name,
+                        progress_callback=lambda fraction, message, detail: update_status(
+                            "persona-paired",
+                            message,
+                            detail,
+                            progress_at(
+                                14,
+                                12,
+                                (processed_units + float(fraction))
+                                / float(total_units),
+                            ),
+                        ),
+                        cancel_event=cancel_event,
+                    )
                 )
-                guide_scored_words = [dict(entry) for entry in guide_analysis.get("word_scores", [])]
+                guide_scored_words = [
+                    dict(entry) for entry in guide_analysis.get("word_scores", [])
+                ]
                 guided_svs_entries.extend(
                     self.guided_svs.build_paired_training_examples(
                         sample_id_prefix=(
@@ -801,13 +922,20 @@ class PIPAModelStore:
                         lyrics=song_lyrics,
                         target_word_scores=target_scored_words,
                         guide_word_scores=guide_scored_words,
-                        guide_similarity_score=float(guide_analysis.get("similarity_score", 0.0)),
+                        guide_similarity_score=float(
+                            guide_analysis.get("similarity_score", 0.0)
+                        ),
                         output_dir=guided_svs_dataset_dir,
                         progress_callback=lambda fraction, message, detail: update_status(
                             "persona-paired",
                             message,
                             f"{detail} | song {song_report['song_id']} | guide {guide_index}/{max(1, len(song_spec.get('guides', [])))}",
-                            progress_at(14, 12, (processed_units + float(fraction)) / float(total_units)),
+                            progress_at(
+                                14,
+                                12,
+                                (processed_units + float(fraction))
+                                / float(total_units),
+                            ),
                         ),
                         cancel_event=cancel_event,
                     )
@@ -815,8 +943,12 @@ class PIPAModelStore:
                 song_report["guide_reports"].append(
                     {
                         "guide_file": guide_path.name,
-                        "similarity_to_lyrics": float(guide_analysis.get("similarity_score", 0.0)),
-                        "analysis_strategy": str(guide_analysis_metadata.get("strategy", "full-audio")),
+                        "similarity_to_lyrics": float(
+                            guide_analysis.get("similarity_score", 0.0)
+                        ),
+                        "analysis_strategy": str(
+                            guide_analysis_metadata.get("strategy", "full-audio")
+                        ),
                     }
                 )
                 processed_units += 1
@@ -890,16 +1022,22 @@ class PIPAModelStore:
             phrase_entries=phrase_entries,
             alignment_tolerance=str(alignment_tolerance or "balanced"),
         )
-        depersonafied_variant_count = sum(len(song.get("guides", [])) for song in paired_specs)
+        depersonafied_variant_count = sum(
+            len(song.get("guides", [])) for song in paired_specs
+        )
         phoneme_profile["training_recipe"] = {
             "mode": "persona-builder-v1",
-            "plan_version": str(training_plan.get("plan_version", "persona-builder-v1")),
+            "plan_version": str(
+                training_plan.get("plan_version", "persona-builder-v1")
+            ),
             "base_voice_clip_count": len(base_specs),
             "paired_song_count": len(paired_specs),
             "depersonafied_variant_count": depersonafied_variant_count,
         }
         phoneme_profile_path = output_dir / "phoneme_profile.json"
-        phoneme_profile_path.write_text(json.dumps(phoneme_profile, indent=2), encoding="utf-8")
+        phoneme_profile_path.write_text(
+            json.dumps(phoneme_profile, indent=2), encoding="utf-8"
+        )
 
         rebuild_clip_reports_path = output_dir / "rebuild_clip_reports.json"
         rebuild_clip_reports_path.write_text(
@@ -926,7 +1064,9 @@ class PIPAModelStore:
         rebuild_profile["created_at"] = _utc_now_iso()
         rebuild_profile["training_recipe"] = dict(phoneme_profile["training_recipe"])
         rebuild_profile_path = output_dir / "rebuild_profile.json"
-        rebuild_profile_path.write_text(json.dumps(rebuild_profile, indent=2), encoding="utf-8")
+        rebuild_profile_path.write_text(
+            json.dumps(rebuild_profile, indent=2), encoding="utf-8"
+        )
 
         reference_bank_index_path = output_dir / "reference_bank_index.json"
         reference_bank_index_path.write_text(
@@ -960,7 +1100,9 @@ class PIPAModelStore:
                     "guided_regeneration_dataset": {
                         "sample_count": int(guided_svs_dataset.get("sample_count", 0)),
                         "total_frames": int(guided_svs_dataset.get("total_frames", 0)),
-                        "total_seconds": float(guided_svs_dataset.get("total_seconds", 0.0)),
+                        "total_seconds": float(
+                            guided_svs_dataset.get("total_seconds", 0.0)
+                        ),
                         "stats_path": str(guided_svs_dataset.get("stats_path", "")),
                         "report_path": str(guided_svs_dataset.get("report_path", "")),
                     },
@@ -1000,7 +1142,9 @@ class PIPAModelStore:
             "guided_svs_report_path": str(guided_svs_dataset.get("report_path", "")),
             "guided_svs_sample_count": int(guided_svs_dataset.get("sample_count", 0)),
             "guided_svs_total_frames": int(guided_svs_dataset.get("total_frames", 0)),
-            "guided_svs_total_seconds": float(guided_svs_dataset.get("total_seconds", 0.0)),
+            "guided_svs_total_seconds": float(
+                guided_svs_dataset.get("total_seconds", 0.0)
+            ),
             "training_plan_path": str(training_plan_path or ""),
             "base_voice_clip_count": len(base_specs),
             "paired_song_count": len(paired_specs),
@@ -1060,7 +1204,9 @@ class PIPAModelStore:
                     "matched_clips": [
                         {
                             "audio_file": audio_path.name,
-                            "transcript": matched_transcripts[str(audio_path.resolve())],
+                            "transcript": matched_transcripts[
+                                str(audio_path.resolve())
+                            ],
                         }
                         for audio_path in audio_paths
                         if str(audio_path.resolve()) in matched_transcripts
@@ -1174,7 +1320,9 @@ class PIPAModelStore:
                     "duration_seconds": duration_seconds,
                     "word_similarity": similarity,
                     "word_count": len(scored_words),
-                    "analysis_strategy": str(analysis_metadata.get("strategy", "full-audio")),
+                    "analysis_strategy": str(
+                        analysis_metadata.get("strategy", "full-audio")
+                    ),
                     "chunk_count": int(analysis_metadata.get("chunk_count", 0)),
                     "chunk_reports": list(analysis_metadata.get("chunk_reports", [])),
                     "word_report": str(analysis.get("word_report", "")),
@@ -1190,6 +1338,7 @@ class PIPAModelStore:
                 ),
                 min(24, 8 + int(round((index / total_files) * 18))),
             )
+
             def report_guided_feature_progress(
                 clip_fraction: float,
                 detail_message: str,
@@ -1208,6 +1357,7 @@ class PIPAModelStore:
                     ),
                     min(29, max(24, overall_progress)),
                 )
+
             guided_svs_entries.extend(
                 self.guided_svs.build_pronunciation_training_examples(
                     sample_id_prefix=f"{index:04d}_{slugify_name(audio_path.stem)}",
@@ -1425,7 +1575,9 @@ class PIPAModelStore:
                     "guided_regeneration_dataset": {
                         "sample_count": int(guided_svs_dataset.get("sample_count", 0)),
                         "total_frames": int(guided_svs_dataset.get("total_frames", 0)),
-                        "total_seconds": float(guided_svs_dataset.get("total_seconds", 0.0)),
+                        "total_seconds": float(
+                            guided_svs_dataset.get("total_seconds", 0.0)
+                        ),
                         "stats_path": str(guided_svs_dataset.get("stats_path", "")),
                         "report_path": str(guided_svs_dataset.get("report_path", "")),
                     },
@@ -1466,7 +1618,9 @@ class PIPAModelStore:
             "guided_svs_report_path": str(guided_svs_dataset.get("report_path", "")),
             "guided_svs_sample_count": int(guided_svs_dataset.get("sample_count", 0)),
             "guided_svs_total_frames": int(guided_svs_dataset.get("total_frames", 0)),
-            "guided_svs_total_seconds": float(guided_svs_dataset.get("total_seconds", 0.0)),
+            "guided_svs_total_seconds": float(
+                guided_svs_dataset.get("total_seconds", 0.0)
+            ),
             "build_dir": str(output_dir),
         }
 
@@ -1527,7 +1681,11 @@ class PIPAModelStore:
                 ),
             )
         if baseline_similarity >= 12.0:
-            return baseline, {"strategy": "full-audio", "chunk_count": 0, "chunk_reports": []}
+            return baseline, {
+                "strategy": "full-audio",
+                "chunk_count": 0,
+                "chunk_reports": [],
+            }
 
         chunked = self._analyze_long_form_pronunciation(
             scorer=scorer,
@@ -1592,7 +1750,9 @@ class PIPAModelStore:
             chunk_words = words[start_index:end_index]
             if not chunk_words:
                 continue
-            chunk_duration_estimate = total_seconds * ((end_index - start_index) / float(total_words))
+            chunk_duration_estimate = total_seconds * (
+                (end_index - start_index) / float(total_words)
+            )
             estimated_start = total_seconds * (start_index / float(total_words))
             estimated_end = total_seconds * (end_index / float(total_words))
             if progress_callback is not None:
@@ -1615,10 +1775,14 @@ class PIPAModelStore:
                 chunk_start = max(0.0, estimated_start - padding)
                 chunk_end = min(total_seconds, estimated_end + padding)
                 start_sample = max(0, int(round(chunk_start * sample_rate)))
-                end_sample = min(int(audio.shape[0]), int(round(chunk_end * sample_rate)))
+                end_sample = min(
+                    int(audio.shape[0]), int(round(chunk_end * sample_rate))
+                )
                 if end_sample <= start_sample:
                     end_sample = min(int(audio.shape[0]), start_sample + sample_rate)
-                chunk_audio = np.asarray(audio[start_sample:end_sample], dtype=np.float32)
+                chunk_audio = np.asarray(
+                    audio[start_sample:end_sample], dtype=np.float32
+                )
                 result = scorer.analyze_segment(
                     chunk_audio,
                     sample_rate,
@@ -1629,7 +1793,9 @@ class PIPAModelStore:
                 )
                 similarity = float(result.get("similarity_score", 0.0))
                 nonzero_words = sum(
-                    1 for entry in result.get("word_scores", []) if float(entry.get("similarity", 0.0)) > 0.0
+                    1
+                    for entry in result.get("word_scores", [])
+                    if float(entry.get("similarity", 0.0)) > 0.0
                 )
                 ranking_score = similarity + (nonzero_words * 0.05)
                 if ranking_score > best_chunk_similarity:
@@ -1669,7 +1835,9 @@ class PIPAModelStore:
                 }
             )
             if progress_callback is not None:
-                average_similarity = running_similarity_sum / max(running_similarity_count, 1)
+                average_similarity = running_similarity_sum / max(
+                    running_similarity_count, 1
+                )
                 progress_callback(
                     chunk_number / float(total_chunks),
                     f"Segmenting {clip_name or 'audio'}: chunk {chunk_number}/{total_chunks}",
@@ -1687,7 +1855,9 @@ class PIPAModelStore:
                 if absolute_index < 0:
                     continue
                 current_best = best_word_scores.get(absolute_index)
-                if current_best is None or float(entry.get("similarity", 0.0)) >= float(current_best.get("similarity", 0.0)):
+                if current_best is None or float(entry.get("similarity", 0.0)) >= float(
+                    current_best.get("similarity", 0.0)
+                ):
                     best_word_scores[absolute_index] = dict(entry)
 
             for entry in best_chunk_result.get("letter_scores", []):
@@ -1699,7 +1869,9 @@ class PIPAModelStore:
                     round(float(entry.get("start", 0.0)), 3),
                 )
                 current_best = best_letter_scores.get(key)
-                if current_best is None or float(entry.get("similarity", 0.0)) >= float(current_best.get("similarity", 0.0)):
+                if current_best is None or float(entry.get("similarity", 0.0)) >= float(
+                    current_best.get("similarity", 0.0)
+                ):
                     best_letter_scores[key] = dict(entry)
 
             if end_index >= total_words:
@@ -1728,9 +1900,9 @@ class PIPAModelStore:
         merged_letter_scores = [dict(entry) for entry in best_letter_scores.values()]
         if progress_callback is not None:
             final_similarity = float(
-                scorer.build_analysis_result(merged_word_scores, merged_letter_scores).get(
-                    "similarity_score", 0.0
-                )
+                scorer.build_analysis_result(
+                    merged_word_scores, merged_letter_scores
+                ).get("similarity_score", 0.0)
             )
             usable_total = sum(
                 1
@@ -1747,7 +1919,9 @@ class PIPAModelStore:
                 ),
             )
         return {
-            "analysis": scorer.build_analysis_result(merged_word_scores, merged_letter_scores),
+            "analysis": scorer.build_analysis_result(
+                merged_word_scores, merged_letter_scores
+            ),
             "chunk_count": len(chunk_reports),
             "chunk_reports": chunk_reports,
         }
@@ -1836,21 +2010,49 @@ class PIPAModelStore:
             "training_report_path": str(final_dir / "training_report.json"),
             "transcript_manifest_path": str(final_dir / "transcript_manifest.json"),
             "reference_bank_index_path": str(final_dir / "reference_bank_index.json"),
-            "guided_regeneration_path": map_build_path(str(regen.get("checkpoint_path", "") or "")),
-            "guided_regeneration_latest_path": map_build_path(str(regen.get("latest_checkpoint_path", "") or "")),
-            "guided_regeneration_config_path": map_build_path(str(regen.get("config_path", "") or "")),
-            "guided_regeneration_stats_path": map_build_path(str(prep_metadata.get("guided_svs_stats_path", "") or "")),
-            "guided_regeneration_report_path": map_build_path(str(regen.get("report_path", "") or "")),
-            "guided_vocoder_path": map_build_path(str(regen.get("vocoder_checkpoint_path", "") or "")),
-            "guided_vocoder_latest_path": map_build_path(str(regen.get("vocoder_latest_checkpoint_path", "") or "")),
-            "guided_vocoder_config_path": map_build_path(str(regen.get("vocoder_config_path", "") or "")),
-            "guided_vocoder_report_path": map_build_path(str(regen.get("vocoder_report_path", "") or "")),
-            "guided_vocoder_history_path": map_build_path(str(regen.get("vocoder_history_path", "") or "")),
-            "guided_regeneration_preview_path": map_build_path(str(regen.get("preview_path", "") or "")),
-            "guided_regeneration_target_preview_path": map_build_path(str(regen.get("target_preview_path", "") or "")),
+            "guided_regeneration_path": map_build_path(
+                str(regen.get("checkpoint_path", "") or "")
+            ),
+            "guided_regeneration_latest_path": map_build_path(
+                str(regen.get("latest_checkpoint_path", "") or "")
+            ),
+            "guided_regeneration_config_path": map_build_path(
+                str(regen.get("config_path", "") or "")
+            ),
+            "guided_regeneration_stats_path": map_build_path(
+                str(prep_metadata.get("guided_svs_stats_path", "") or "")
+            ),
+            "guided_regeneration_report_path": map_build_path(
+                str(regen.get("report_path", "") or "")
+            ),
+            "guided_vocoder_path": map_build_path(
+                str(regen.get("vocoder_checkpoint_path", "") or "")
+            ),
+            "guided_vocoder_latest_path": map_build_path(
+                str(regen.get("vocoder_latest_checkpoint_path", "") or "")
+            ),
+            "guided_vocoder_config_path": map_build_path(
+                str(regen.get("vocoder_config_path", "") or "")
+            ),
+            "guided_vocoder_report_path": map_build_path(
+                str(regen.get("vocoder_report_path", "") or "")
+            ),
+            "guided_vocoder_history_path": map_build_path(
+                str(regen.get("vocoder_history_path", "") or "")
+            ),
+            "guided_regeneration_preview_path": map_build_path(
+                str(regen.get("preview_path", "") or "")
+            ),
+            "guided_regeneration_target_preview_path": map_build_path(
+                str(regen.get("target_preview_path", "") or "")
+            ),
             "pronunciation_strategy": {
-                "unit_mode": str(prep_metadata.get("phoneme_mode", "approx-pronunciation-units")),
-                "alignment_tolerance": str(prep_metadata.get("alignment_tolerance", "balanced")),
+                "unit_mode": str(
+                    prep_metadata.get("phoneme_mode", "approx-pronunciation-units")
+                ),
+                "alignment_tolerance": str(
+                    prep_metadata.get("alignment_tolerance", "balanced")
+                ),
                 "scoring_model": "wav2vec2_asr_base_960h_letter_alignment",
                 "transcript_fallback": "forgiving_skip_not_fail",
             },
@@ -1863,21 +2065,42 @@ class PIPAModelStore:
             "guided_regeneration_strategy": {
                 "enabled": bool(str(regen.get("checkpoint_path", "") or "")),
                 "model_type": "guide-conditioned-persona-regenerator-v3",
-                "conditioning": ["guide_mel", "pronunciation_units", "pitch", "energy", "voiced_unvoiced", "target_voice_prototype"],
-                "vocoder": str(regen.get("render_mode", "griffinlim_preview_only") or "griffinlim_preview_only"),
+                "conditioning": [
+                    "guide_mel",
+                    "pronunciation_units",
+                    "pitch",
+                    "energy",
+                    "voiced_unvoiced",
+                    "target_voice_prototype",
+                ],
+                "vocoder": str(
+                    regen.get("render_mode", "griffinlim_preview_only")
+                    or "griffinlim_preview_only"
+                ),
                 "best_val_l1": float(regen.get("best_val_l1", 0.0)),
                 "best_val_total": float(regen.get("best_val_total", 0.0)),
                 "best_epoch": int(regen.get("best_epoch", 0)),
                 "best_phone_accuracy": float(regen.get("best_phone_accuracy", 0.0)),
-                "best_lyric_phone_accuracy": float(regen.get("best_lyric_phone_accuracy", 0.0)),
+                "best_lyric_phone_accuracy": float(
+                    regen.get("best_lyric_phone_accuracy", 0.0)
+                ),
                 "best_vuv_accuracy": float(regen.get("best_vuv_accuracy", 0.0)),
-                "vocoder_best_val_total": float(regen.get("vocoder_best_val_total", 0.0)),
+                "vocoder_best_val_total": float(
+                    regen.get("vocoder_best_val_total", 0.0)
+                ),
                 "vocoder_best_epoch": int(regen.get("vocoder_best_epoch", 0)),
-                "vocoder_quality_summary": str(regen.get("vocoder_quality_summary", "") or ""),
-                "vocoder_hardware_summary": str(regen.get("vocoder_hardware_summary", "") or ""),
+                "vocoder_quality_summary": str(
+                    regen.get("vocoder_quality_summary", "") or ""
+                ),
+                "vocoder_hardware_summary": str(
+                    regen.get("vocoder_hardware_summary", "") or ""
+                ),
                 "hardware_summary": str(regen.get("hardware_summary", "") or ""),
                 "quality_summary": str(regen.get("quality_summary", "") or ""),
-                "search_mode": str(regen.get("search_mode", "mc-dropout-target-voice-rerank") or "mc-dropout-target-voice-rerank"),
+                "search_mode": str(
+                    regen.get("search_mode", "mc-dropout-target-voice-rerank")
+                    or "mc-dropout-target-voice-rerank"
+                ),
                 "last_epoch": int(regen.get("last_epoch", 0)),
                 "sample_count": int(regen.get("sample_count", 0)),
             },
@@ -1886,10 +2109,14 @@ class PIPAModelStore:
                 "version": str(settings.get("version", "")),
                 "f0_method": str(settings.get("f0_method", "")),
                 "total_epochs": int(settings.get("total_epochs", 0)),
-                "requested_total_epochs": int(settings.get("requested_total_epochs", 0)),
+                "requested_total_epochs": int(
+                    settings.get("requested_total_epochs", 0)
+                ),
                 "warmup_stage_epochs": int(settings.get("warmup_stage_epochs", 0)),
                 "bridge_stage_epochs": int(settings.get("bridge_stage_epochs", 0)),
-                "full_diversity_stage_epochs": int(settings.get("full_diversity_stage_epochs", 0)),
+                "full_diversity_stage_epochs": int(
+                    settings.get("full_diversity_stage_epochs", 0)
+                ),
                 "start_phase": str(settings.get("start_phase", "auto") or "auto"),
                 "save_every_epoch": int(settings.get("save_every_epoch", 0)),
                 "batch_size": int(settings.get("batch_size", 0)),
@@ -1900,13 +2127,19 @@ class PIPAModelStore:
                 "total_audio_files": int(prep_metadata.get("total_audio_files", 0)),
                 "matched_audio_files": int(prep_metadata.get("matched_audio_files", 0)),
                 "skipped_audio_files": int(prep_metadata.get("skipped_audio_files", 0)),
-                "reference_word_count": int(prep_metadata.get("reference_word_count", 0)),
-                "reference_phrase_count": int(prep_metadata.get("reference_phrase_count", 0)),
+                "reference_word_count": int(
+                    prep_metadata.get("reference_word_count", 0)
+                ),
+                "reference_phrase_count": int(
+                    prep_metadata.get("reference_phrase_count", 0)
+                ),
             },
         }
         manifest_path = final_dir / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        self._reference_index_cache.pop(str(final_dir / "reference_bank_index.json"), None)
+        self._reference_index_cache.pop(
+            str(final_dir / "reference_bank_index.json"), None
+        )
         return {
             "selection_name": str(manifest["selection_name"]),
             "manifest_path": str(manifest_path),
@@ -1915,15 +2148,31 @@ class PIPAModelStore:
             "rebuild_clip_reports_path": str(final_dir / "rebuild_clip_reports.json"),
             "training_report_path": str(final_dir / "training_report.json"),
             "reference_bank_index_path": str(final_dir / "reference_bank_index.json"),
-            "guided_regeneration_path": str(manifest.get("guided_regeneration_path", "") or ""),
-            "guided_regeneration_config_path": str(manifest.get("guided_regeneration_config_path", "") or ""),
-            "guided_regeneration_stats_path": str(manifest.get("guided_regeneration_stats_path", "") or ""),
-            "guided_regeneration_report_path": str(manifest.get("guided_regeneration_report_path", "") or ""),
+            "guided_regeneration_path": str(
+                manifest.get("guided_regeneration_path", "") or ""
+            ),
+            "guided_regeneration_config_path": str(
+                manifest.get("guided_regeneration_config_path", "") or ""
+            ),
+            "guided_regeneration_stats_path": str(
+                manifest.get("guided_regeneration_stats_path", "") or ""
+            ),
+            "guided_regeneration_report_path": str(
+                manifest.get("guided_regeneration_report_path", "") or ""
+            ),
             "guided_vocoder_path": str(manifest.get("guided_vocoder_path", "") or ""),
-            "guided_vocoder_config_path": str(manifest.get("guided_vocoder_config_path", "") or ""),
-            "guided_vocoder_report_path": str(manifest.get("guided_vocoder_report_path", "") or ""),
-            "guided_regeneration_preview_path": str(manifest.get("guided_regeneration_preview_path", "") or ""),
-            "guided_regeneration_target_preview_path": str(manifest.get("guided_regeneration_target_preview_path", "") or ""),
+            "guided_vocoder_config_path": str(
+                manifest.get("guided_vocoder_config_path", "") or ""
+            ),
+            "guided_vocoder_report_path": str(
+                manifest.get("guided_vocoder_report_path", "") or ""
+            ),
+            "guided_regeneration_preview_path": str(
+                manifest.get("guided_regeneration_preview_path", "") or ""
+            ),
+            "guided_regeneration_target_preview_path": str(
+                manifest.get("guided_regeneration_target_preview_path", "") or ""
+            ),
         }
 
     def _match_transcripts(
@@ -1942,8 +2191,12 @@ class PIPAModelStore:
                 ".txt": self._parse_text_transcript,
                 ".json": self._parse_json_transcript,
                 ".jsonl": self._parse_jsonl_transcript,
-                ".csv": lambda path: self._parse_delimited_transcript(path, delimiter=","),
-                ".tsv": lambda path: self._parse_delimited_transcript(path, delimiter="\t"),
+                ".csv": lambda path: self._parse_delimited_transcript(
+                    path, delimiter=","
+                ),
+                ".tsv": lambda path: self._parse_delimited_transcript(
+                    path, delimiter="\t"
+                ),
             }.get(suffix)
             if parser is None:
                 unparsed_transcript_files.append(transcript_path.name)
@@ -1970,7 +2223,11 @@ class PIPAModelStore:
                 if key in transcript_records:
                     selected_text = transcript_records[key]
                     break
-            if not selected_text and len(audio_paths) == 1 and len(transcript_records) == 1:
+            if (
+                not selected_text
+                and len(audio_paths) == 1
+                and len(transcript_records) == 1
+            ):
                 selected_text = next(iter(transcript_records.values()))
             if selected_text:
                 matched[str(audio_path.resolve())] = selected_text
@@ -1989,7 +2246,9 @@ class PIPAModelStore:
                     "audio_file": audio_path.name,
                     "transcript_source": transcript_sources.get(
                         normalize_match_key(audio_path.name),
-                        transcript_sources.get(normalize_match_key(audio_path.stem), ""),
+                        transcript_sources.get(
+                            normalize_match_key(audio_path.stem), ""
+                        ),
                     ),
                 }
                 for audio_path in audio_paths
@@ -2017,7 +2276,9 @@ class PIPAModelStore:
 
     def _parse_jsonl_transcript(self, transcript_path: Path) -> Dict[str, str]:
         records: Dict[str, str] = {}
-        for raw_line in transcript_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        for raw_line in transcript_path.read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines():
             line = raw_line.strip()
             if not line:
                 continue
@@ -2028,7 +2289,9 @@ class PIPAModelStore:
             records.update(self._normalize_transcript_payload(payload))
         return records
 
-    def _parse_delimited_transcript(self, transcript_path: Path, *, delimiter: str) -> Dict[str, str]:
+    def _parse_delimited_transcript(
+        self, transcript_path: Path, *, delimiter: str
+    ) -> Dict[str, str]:
         content = transcript_path.read_text(encoding="utf-8", errors="ignore")
         reader = csv.reader(content.splitlines(), delimiter=delimiter)
         rows = [row for row in reader if row]
@@ -2073,7 +2336,12 @@ class PIPAModelStore:
     def _normalize_transcript_payload(self, payload: object) -> Dict[str, str]:
         if isinstance(payload, dict):
             if any(key in payload for key in ("clips", "items", "entries")):
-                items = payload.get("clips") or payload.get("items") or payload.get("entries") or []
+                items = (
+                    payload.get("clips")
+                    or payload.get("items")
+                    or payload.get("entries")
+                    or []
+                )
                 return self._normalize_transcript_payload(items)
             if all(isinstance(value, str) for value in payload.values()):
                 return {
@@ -2143,7 +2411,9 @@ class PIPAModelStore:
                     "start_sample": int(start),
                     "end_sample": int(end),
                     "duration_seconds": round(duration_seconds, 4),
-                    "performance": dict((performance_lookup or {}).get(absolute_index, {})),
+                    "performance": dict(
+                        (performance_lookup or {}).get(absolute_index, {})
+                    ),
                 }
             )
             if entry_index % 256 == 0:
@@ -2170,10 +2440,14 @@ class PIPAModelStore:
         for window_size in (2, 3):
             for start_index in range(0, max(0, len(usable) - window_size + 1)):
                 window = usable[start_index : start_index + window_size]
-                phrase_words = [normalize_lyrics(str(entry.get("word", ""))) for entry in window]
+                phrase_words = [
+                    normalize_lyrics(str(entry.get("word", ""))) for entry in window
+                ]
                 if any(not word for word in phrase_words):
                     continue
-                window_scores = [float(entry.get("similarity", 0.0)) for entry in window]
+                window_scores = [
+                    float(entry.get("similarity", 0.0)) for entry in window
+                ]
                 if min(window_scores) < float(threshold):
                     continue
                 start, end = self._window_to_samples(
@@ -2194,7 +2468,8 @@ class PIPAModelStore:
                 window_performance = [
                     dict((performance_lookup or {}).get(word_index, {}))
                     for word_index in window_indices
-                    if int(word_index) >= 0 and dict((performance_lookup or {}).get(word_index, {}))
+                    if int(word_index) >= 0
+                    and dict((performance_lookup or {}).get(word_index, {}))
                 ]
                 candidates.append(
                     {
@@ -2202,13 +2477,19 @@ class PIPAModelStore:
                         "phrase": phrase,
                         "word": phrase_words[0],
                         "words": phrase_words,
-                        "units": [unit for word in phrase_words for unit in pronunciation_units(word)],
+                        "units": [
+                            unit
+                            for word in phrase_words
+                            for unit in pronunciation_units(word)
+                        ],
                         "similarity": round(float(np.mean(window_scores)), 3),
                         "source_path": str(audio_path),
                         "start_sample": int(start),
                         "end_sample": int(end),
                         "duration_seconds": round(duration_seconds, 4),
-                        "performance": self._summarize_candidate_performance(window_performance),
+                        "performance": self._summarize_candidate_performance(
+                            window_performance
+                        ),
                     }
                 )
                 if start_index % 256 == 0:
@@ -2321,7 +2602,9 @@ class PIPAModelStore:
                     "duration_seconds": float(candidate.get("duration_seconds", 0.0)),
                     "source_file": source_path.name,
                     "performance": performance,
-                    "relative_path": target_path.relative_to(target_dir.parent).as_posix(),
+                    "relative_path": target_path.relative_to(
+                        target_dir.parent
+                    ).as_posix(),
                 }
             )
             if progress_callback is not None and (
@@ -2364,14 +2647,30 @@ class PIPAModelStore:
             if float(item.get("voiced_ratio", 0.0)) >= 0.0
         ]
         return {
-            "duration_seconds": round(float(np.sum(duration_values)) if duration_values else 0.0, 4),
-            "pitch_median_hz": round(float(np.median(pitch_values)) if pitch_values else 0.0, 3),
-            "pitch_mean_hz": round(float(np.mean(pitch_values)) if pitch_values else 0.0, 3),
-            "energy_mean": round(float(np.mean(energy_values)) if energy_values else 0.0, 6),
-            "energy_peak": round(float(np.max(energy_values)) if energy_values else 0.0, 6),
-            "onset_mean": round(float(np.mean(onset_values)) if onset_values else 0.0, 6),
-            "onset_peak": round(float(np.max(onset_values)) if onset_values else 0.0, 6),
-            "voiced_ratio": round(float(np.mean(voiced_values)) if voiced_values else 0.0, 4),
+            "duration_seconds": round(
+                float(np.sum(duration_values)) if duration_values else 0.0, 4
+            ),
+            "pitch_median_hz": round(
+                float(np.median(pitch_values)) if pitch_values else 0.0, 3
+            ),
+            "pitch_mean_hz": round(
+                float(np.mean(pitch_values)) if pitch_values else 0.0, 3
+            ),
+            "energy_mean": round(
+                float(np.mean(energy_values)) if energy_values else 0.0, 6
+            ),
+            "energy_peak": round(
+                float(np.max(energy_values)) if energy_values else 0.0, 6
+            ),
+            "onset_mean": round(
+                float(np.mean(onset_values)) if onset_values else 0.0, 6
+            ),
+            "onset_peak": round(
+                float(np.max(onset_values)) if onset_values else 0.0, 6
+            ),
+            "voiced_ratio": round(
+                float(np.mean(voiced_values)) if voiced_values else 0.0, 4
+            ),
         }
 
     def _build_phoneme_profile(
@@ -2409,7 +2708,11 @@ class PIPAModelStore:
                 2,
             ),
             "average_clip_similarity": round(
-                float(np.mean(clip_similarity_values)) if clip_similarity_values else 0.0,
+                (
+                    float(np.mean(clip_similarity_values))
+                    if clip_similarity_values
+                    else 0.0
+                ),
                 2,
             ),
             "reference_word_count": len(word_entries),

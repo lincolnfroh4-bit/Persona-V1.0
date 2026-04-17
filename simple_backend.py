@@ -195,7 +195,8 @@ class SimpleRVCBackend:
         exact_folder_matches = [
             file
             for file in index_files
-            if file.parent.name in candidate_set or file.parent.name.lower() in candidate_set
+            if file.parent.name in candidate_set
+            or file.parent.name.lower() in candidate_set
         ]
         if exact_folder_matches:
             return sorted(exact_folder_matches)[0].as_posix()
@@ -236,14 +237,26 @@ class SimpleRVCBackend:
                     "kind": "persona",
                     "system": "Persona v1.0",
                     "rvc_model_name": "",
-                    "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
-                    "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
-                    "reference_bank_path": str(bundle.get("reference_bank_path", "") or ""),
+                    "phoneme_profile_path": str(
+                        bundle.get("phoneme_profile_path", "") or ""
+                    ),
+                    "rebuild_profile_path": str(
+                        bundle.get("rebuild_profile_path", "") or ""
+                    ),
+                    "reference_bank_path": str(
+                        bundle.get("reference_bank_path", "") or ""
+                    ),
                     "manifest_path": manifest_path,
                     "guided_regeneration_path": guided_regeneration_path,
-                    "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
-                    "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
-                    "package_mode": str(bundle.get("package_mode", "persona-v1") or "persona-v1"),
+                    "guided_regeneration_report_path": str(
+                        bundle.get("guided_regeneration_report_path", "") or ""
+                    ),
+                    "guided_regeneration_preview_path": str(
+                        bundle.get("guided_regeneration_preview_path", "") or ""
+                    ),
+                    "package_mode": str(
+                        bundle.get("package_mode", "persona-v1") or "persona-v1"
+                    ),
                 }
             )
 
@@ -272,14 +285,24 @@ class SimpleRVCBackend:
                 "system": "Persona v1.0",
                 "rvc_model_name": "",
                 "default_index": "",
-                "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
-                "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
+                "phoneme_profile_path": str(
+                    bundle.get("phoneme_profile_path", "") or ""
+                ),
+                "rebuild_profile_path": str(
+                    bundle.get("rebuild_profile_path", "") or ""
+                ),
                 "reference_bank_path": str(bundle.get("reference_bank_path", "") or ""),
                 "manifest_path": manifest_path,
                 "guided_regeneration_path": guided_regeneration_path,
-                "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
-                "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
-                "package_mode": str(bundle.get("package_mode", "persona-v1") or "persona-v1"),
+                "guided_regeneration_report_path": str(
+                    bundle.get("guided_regeneration_report_path", "") or ""
+                ),
+                "guided_regeneration_preview_path": str(
+                    bundle.get("guided_regeneration_preview_path", "") or ""
+                ),
+                "package_mode": str(
+                    bundle.get("package_mode", "persona-v1") or "persona-v1"
+                ),
             }
 
         raise FileNotFoundError(f"Persona package not found: {requested}")
@@ -356,7 +379,11 @@ class SimpleRVCBackend:
 
     def _separator_python(self) -> Path:
         python_name = "python.exe" if os.name == "nt" else "python"
-        return self.separator_env_root / "Scripts" / python_name if os.name == "nt" else self.separator_env_root / "bin" / python_name
+        return (
+            self.separator_env_root / "Scripts" / python_name
+            if os.name == "nt"
+            else self.separator_env_root / "bin" / python_name
+        )
 
     def _ensure_hubert_loaded(self) -> None:
         if self.hubert_model is not None:
@@ -453,7 +480,9 @@ class SimpleRVCBackend:
             resolved = self.resolve_model_reference(model_name)
             normalized = str(resolved.get("default_index", "") or "")
             if not normalized:
-                normalized = self.find_default_index(str(resolved.get("rvc_model_name", model_name)))
+                normalized = self.find_default_index(
+                    str(resolved.get("rvc_model_name", model_name))
+                )
         return normalized.replace("trained", "added")
 
     def _transcode_audio(self, input_wav: Path, output_path: Path) -> None:
@@ -541,8 +570,10 @@ class SimpleRVCBackend:
         clip_duration: float = 5.0,
     ) -> Dict[str, float]:
         total_duration = max(0.0, self.get_audio_duration(input_path))
-        actual_duration = clip_duration if total_duration <= 0 else min(
-            float(clip_duration), total_duration
+        actual_duration = (
+            clip_duration
+            if total_duration <= 0
+            else min(float(clip_duration), total_duration)
         )
         start_time = max(0.0, (total_duration - actual_duration) / 2.0)
 
@@ -716,12 +747,18 @@ class SimpleRVCBackend:
     def _ensure_best_deecho_separator(self, strength: int):
         preferred_model_key = "deecho-dereverb"
         try:
-            return self._ensure_uvr_separator(preferred_model_key, strength), preferred_model_key
+            return (
+                self._ensure_uvr_separator(preferred_model_key, strength),
+                preferred_model_key,
+            )
         except Exception:
             fallback_model_key = (
                 "deecho-aggressive" if int(strength) >= 12 else "deecho-normal"
             )
-            return self._ensure_uvr_separator(fallback_model_key, strength), fallback_model_key
+            return (
+                self._ensure_uvr_separator(fallback_model_key, strength),
+                fallback_model_key,
+            )
 
     def _prepare_uvr_input(self, input_path: Path, work_dir: Path) -> Path:
         reset_directory(work_dir)
@@ -820,8 +857,16 @@ class SimpleRVCBackend:
         total_energy = float(np.sum(spectrum) + 1e-9)
         vocal_band = (freqs >= 120.0) & (freqs <= 5500.0)
         low_band = freqs < 110.0
-        vocal_ratio = float(np.sum(spectrum[vocal_band]) / total_energy) if np.any(vocal_band) else 0.0
-        low_ratio = float(np.sum(spectrum[low_band]) / total_energy) if np.any(low_band) else 0.0
+        vocal_ratio = (
+            float(np.sum(spectrum[vocal_band]) / total_energy)
+            if np.any(vocal_band)
+            else 0.0
+        )
+        low_ratio = (
+            float(np.sum(spectrum[low_band]) / total_energy)
+            if np.any(low_band)
+            else 0.0
+        )
 
         score = (
             (rms * 7.5)
@@ -874,10 +919,14 @@ class SimpleRVCBackend:
         rms_closeness = 0.0
         if reference_path is not None and reference_path.exists():
             try:
-                reference_audio, reference_sr = sf.read(str(reference_path), always_2d=True)
+                reference_audio, reference_sr = sf.read(
+                    str(reference_path), always_2d=True
+                )
                 reference_fixed = self._ensure_2d_audio(reference_audio)
                 if int(reference_sr) == int(sample_rate) and reference_fixed.size > 0:
-                    reference_mono = reference_fixed.mean(axis=1).astype(np.float32, copy=False)
+                    reference_mono = reference_fixed.mean(axis=1).astype(
+                        np.float32, copy=False
+                    )
                     usable = min(reference_mono.shape[0], mono.shape[0])
                     if usable > 256:
                         step = max(1, usable // 4096)
@@ -891,13 +940,17 @@ class SimpleRVCBackend:
                             if reference_std > 1e-7 and candidate_std > 1e-7:
                                 correlation = float(
                                     np.clip(
-                                        np.corrcoef(reference_centered, candidate_centered)[0, 1],
+                                        np.corrcoef(
+                                            reference_centered, candidate_centered
+                                        )[0, 1],
                                         -1.0,
                                         1.0,
                                     )
                                 )
                                 correlation = max(0.0, correlation)
-                    reference_rms = float(np.sqrt(np.mean(np.square(reference_mono)) + 1e-9))
+                    reference_rms = float(
+                        np.sqrt(np.mean(np.square(reference_mono)) + 1e-9)
+                    )
                     if reference_rms > 1e-7 and rms > 1e-7:
                         rms_closeness = float(
                             np.clip(
@@ -934,8 +987,12 @@ class SimpleRVCBackend:
         *,
         reference_path: Optional[Path] = None,
     ) -> Path:
-        preferred_stats = self._describe_output_candidate(preferred_path, reference_path=reference_path)
-        alternate_stats = self._describe_output_candidate(alternate_path, reference_path=reference_path)
+        preferred_stats = self._describe_output_candidate(
+            preferred_path, reference_path=reference_path
+        )
+        alternate_stats = self._describe_output_candidate(
+            alternate_path, reference_path=reference_path
+        )
 
         # If the preferred stem is at least plausibly vocal-like, keep it unless
         # the alternate is clearly better. This avoids accidentally routing the
@@ -1221,9 +1278,7 @@ class SimpleRVCBackend:
             return extracted_vocal_path
 
         if pipeline_id == "reverb-polish":
-            polish_strength = int(
-                round(self._interpolate_strength(strength, 4.0, 7.0))
-            )
+            polish_strength = int(round(self._interpolate_strength(strength, 4.0, 7.0)))
             try:
                 polished_path = self._polish_lead_vocal_dereverb(
                     extracted_vocal_path,
@@ -1293,7 +1348,11 @@ class SimpleRVCBackend:
             final_name = "max-clean.wav"
 
         deecho_strength = int(
-            round(self._interpolate_strength(strength, deecho_strength_low, deecho_strength_high))
+            round(
+                self._interpolate_strength(
+                    strength, deecho_strength_low, deecho_strength_high
+                )
+            )
         )
         try:
             polished_path = self._polish_lead_vocal_dereverb(
@@ -1310,7 +1369,11 @@ class SimpleRVCBackend:
             polished_path = lead_vocal_path
 
         preserve_amount = int(
-            round(self._interpolate_inverse_strength(strength, preserve_high, preserve_low))
+            round(
+                self._interpolate_inverse_strength(
+                    strength, preserve_high, preserve_low
+                )
+            )
         )
         return self._blend_preprocess_presence(
             polished_path,
@@ -1429,7 +1492,9 @@ class SimpleRVCBackend:
             removed_echo_path = self._find_uvr_output(deecho_removed_dir, "vocal")
 
             if update_progress is not None:
-                update_progress("Finalizing cleaned vocal and removed-echo layer...", 94)
+                update_progress(
+                    "Finalizing cleaned vocal and removed-echo layer...", 94
+                )
             source_audio, sample_rate = sf.read(str(source_path), always_2d=True)
             cleaned_audio, _ = sf.read(str(clean_main_path), always_2d=True)
             removed_echo_audio, _ = sf.read(str(removed_echo_path), always_2d=True)
@@ -1580,7 +1645,9 @@ class SimpleRVCBackend:
             preprocess_applied = False
             if normalized_preprocess_mode != "off":
                 if work_dir is None:
-                    raise RuntimeError("A work directory is required for preprocessing.")
+                    raise RuntimeError(
+                        "A work directory is required for preprocessing."
+                    )
                 source_path = self.preprocess_for_conversion_pipeline(
                     input_path,
                     work_dir,
@@ -1636,9 +1703,9 @@ class SimpleRVCBackend:
 
             return {
                 "sample_rate": final_sr,
-                "index_path": normalized_index
-                if Path(normalized_index).exists()
-                else "",
+                "index_path": (
+                    normalized_index if Path(normalized_index).exists() else ""
+                ),
                 "timings": {
                     "npy": round(times[0], 2),
                     "f0": round(times[1], 2),

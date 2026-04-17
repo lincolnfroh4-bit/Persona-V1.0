@@ -43,7 +43,6 @@ from simple_rebuild import RebuildFeatureBuilder
 from simple_touchup import NeuralClarityRepairEngine
 from simple_training import SimpleTrainer
 
-
 REPO_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = REPO_ROOT / "simple_webui"
 JOBS_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "jobs"
@@ -57,7 +56,9 @@ OPTIMIZE_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "optimize"
 API_COMPOSE_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "api-compose"
 ALBUMS_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "albums"
 GENERATE_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "generate"
-MASTER_CONVERSION_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "master-conversion"
+MASTER_CONVERSION_ROOT = (
+    REPO_ROOT / "audio-outputs" / "simple-web" / "master-conversion"
+)
 REBUILD_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "rebuild"
 
 # The original RVC codebase relies on many repo-relative paths like "rmvpe.pt".
@@ -936,6 +937,8 @@ def _start_persona_runtime(mode: str, job_id: str):
     session = _persona_runtime_session(mode, job_id)
     session.__enter__()
     return session
+
+
 progress_log_cache: Dict[str, tuple[str, int, str]] = {}
 
 app.mount("/static", StaticFiles(directory=str(STATIC_ROOT)), name="static")
@@ -950,13 +953,17 @@ app.mount(
 async def disable_cache(request: Request, call_next):
     response = await call_next(request)
     if request.method == "GET":
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate, max-age=0"
+        )
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     return response
 
 
-def log_progress_bar(job_kind: str, job_id: str, status: str, progress: int, message: str) -> None:
+def log_progress_bar(
+    job_kind: str, job_id: str, status: str, progress: int, message: str
+) -> None:
     normalized_progress = max(0, min(int(progress), 100))
     safe_status = status or "running"
     safe_message = (message or "").strip()
@@ -1022,7 +1029,11 @@ def start_progress_heartbeat(
 
 
 def audio_output_url(file_path: Path) -> str:
-    relative = file_path.resolve().relative_to((REPO_ROOT / "audio-outputs").resolve()).as_posix()
+    relative = (
+        file_path.resolve()
+        .relative_to((REPO_ROOT / "audio-outputs").resolve())
+        .as_posix()
+    )
     return f"/downloads/{relative}"
 
 
@@ -1146,7 +1157,9 @@ def set_training_job_state(job_id: str, **updates) -> None:
         )
         if new_signature != previous_signature:
             timestamp = time.strftime("%H:%M:%S")
-            line = f"[{timestamp}] {job.stage or job.status or 'training'} | {job.message}"
+            line = (
+                f"[{timestamp}] {job.stage or job.status or 'training'} | {job.message}"
+            )
             detail = str(job.log_tail or "").strip()
             if detail:
                 line = f"{line} | {detail}"
@@ -1307,11 +1320,15 @@ def build_conversion_settings(
         "f0_method": pitch_method or preset["f0_method"],
         "index_path": index_path,
         "index_rate": index_rate if index_rate >= 0 else preset["index_rate"],
-        "filter_radius": filter_radius if filter_radius >= 0 else preset["filter_radius"],
+        "filter_radius": (
+            filter_radius if filter_radius >= 0 else preset["filter_radius"]
+        ),
         "resample_sr": resample_sr,
         "rms_mix_rate": rms_mix_rate if rms_mix_rate >= 0 else preset["rms_mix_rate"],
         "protect": protect if protect >= 0 else preset["protect"],
-        "crepe_hop_length": crepe_hop_length if crepe_hop_length >= 0 else preset["crepe_hop_length"],
+        "crepe_hop_length": (
+            crepe_hop_length if crepe_hop_length >= 0 else preset["crepe_hop_length"]
+        ),
     }
 
 
@@ -1408,7 +1425,9 @@ def _match_stereo_audio_shape(audio: np.ndarray, target_length: int) -> np.ndarr
     if working.shape[0] > target_length:
         return working[:target_length].astype(np.float32, copy=False)
 
-    pad = np.zeros((target_length - working.shape[0], working.shape[1]), dtype=np.float32)
+    pad = np.zeros(
+        (target_length - working.shape[0], working.shape[1]), dtype=np.float32
+    )
     return np.vstack([working.astype(np.float32, copy=False), pad])
 
 
@@ -1423,7 +1442,9 @@ def blend_audio_outputs(
     primary_audio, primary_sr = sf.read(str(primary_path), always_2d=True)
     secondary_audio, secondary_sr = sf.read(str(secondary_path), always_2d=True)
     if int(primary_sr) != int(secondary_sr):
-        raise RuntimeError("Blend mode requires both model renders to have the same sample rate.")
+        raise RuntimeError(
+            "Blend mode requires both model renders to have the same sample rate."
+        )
 
     target_length = max(int(primary_audio.shape[0]), int(secondary_audio.shape[0]))
     primary_matched = _match_stereo_audio_shape(primary_audio, target_length)
@@ -1431,14 +1452,25 @@ def blend_audio_outputs(
 
     primary_weight = max(0.0, min(float(primary_percentage) / 100.0, 1.0))
     secondary_weight = 1.0 - primary_weight
-    blended = (primary_matched * primary_weight) + (secondary_matched * secondary_weight)
+    blended = (primary_matched * primary_weight) + (
+        secondary_matched * secondary_weight
+    )
     peak = float(np.max(np.abs(blended)) + 1e-9)
     if peak > 0.995:
         blended = blended * np.float32(0.995 / peak)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_wav = output_path if output_format.lower() == "wav" else output_path.with_suffix(".wav")
-    sf.write(str(temp_wav), blended.astype(np.float32, copy=False), int(primary_sr), subtype="PCM_24")
+    temp_wav = (
+        output_path
+        if output_format.lower() == "wav"
+        else output_path.with_suffix(".wav")
+    )
+    sf.write(
+        str(temp_wav),
+        blended.astype(np.float32, copy=False),
+        int(primary_sr),
+        subtype="PCM_24",
+    )
 
     if output_format.lower() != "wav":
         backend._transcode_audio(temp_wav, output_path)
@@ -1488,7 +1520,9 @@ def album_song_directory(project_id: str, song_index: int) -> Path:
 
 def album_relative_path(project_id: str, *parts: str) -> str:
     clean_parts = [sanitize_filename(part) for part in parts]
-    return "/".join(["simple-web", "albums", sanitize_filename(project_id), *clean_parts])
+    return "/".join(
+        ["simple-web", "albums", sanitize_filename(project_id), *clean_parts]
+    )
 
 
 def album_download_url(relative_path: str) -> str:
@@ -1528,9 +1562,13 @@ def resolve_album_version_asset_path(
     project_id = sanitize_filename(project_id)
     song_index = int(song_index)
     version_number = int(version_entry.get("version", 0))
-    storage_key = sanitize_filename(storage_key or str(version_entry.get("storage_key", "")))
+    storage_key = sanitize_filename(
+        storage_key or str(version_entry.get("storage_key", ""))
+    )
 
-    explicit_rel = str(version_entry.get("prepared_rel_path" if prepared else "stored_rel_path", ""))
+    explicit_rel = str(
+        version_entry.get("prepared_rel_path" if prepared else "stored_rel_path", "")
+    )
     if explicit_rel:
         explicit_path = REPO_ROOT / "audio-outputs" / Path(explicit_rel)
         if explicit_path.exists():
@@ -1544,7 +1582,11 @@ def resolve_album_version_asset_path(
     if not search_root.exists():
         return None
 
-    target_name = f"v{version_number}_prepared.wav" if prepared else str(version_entry.get("stored_file_name", ""))
+    target_name = (
+        f"v{version_number}_prepared.wav"
+        if prepared
+        else str(version_entry.get("stored_file_name", ""))
+    )
 
     if prepared:
         stored_path = resolve_album_version_asset_path(
@@ -1580,7 +1622,11 @@ def resolve_album_version_asset_path(
             return preferred
 
     if target_name:
-        matches = [found_path for found_path in search_root.rglob(target_name) if found_path.is_file()]
+        matches = [
+            found_path
+            for found_path in search_root.rglob(target_name)
+            if found_path.is_file()
+        ]
         if len(matches) == 1:
             return matches[0]
         if matches and storage_key:
@@ -1597,7 +1643,9 @@ def resolve_album_version_asset_path(
             candidates = sorted(
                 path
                 for path in storage_dir.iterdir()
-                if path.is_file() and path.suffix.lower() in {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
+                if path.is_file()
+                and path.suffix.lower()
+                in {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
             )
             if prepared:
                 for candidate in candidates:
@@ -1624,16 +1672,16 @@ def resolve_album_mix_asset_path(project: Dict[str, object]) -> Optional[Path]:
         return None
 
     candidate_paths = sorted(
-        path
-        for path in project_root.rglob("mix_v*.wav")
-        if path.is_file()
+        path for path in project_root.rglob("mix_v*.wav") if path.is_file()
     )
     if candidate_paths:
         return candidate_paths[-1]
     return None
 
 
-def album_song_play_url(project_id: str, song_index: int, version: Optional[int] = None) -> str:
+def album_song_play_url(
+    project_id: str, song_index: int, version: Optional[int] = None
+) -> str:
     route = f"/api/albums/projects/{sanitize_filename(project_id)}/songs/{int(song_index)}/play"
     if version is None:
         return route
@@ -1646,9 +1694,7 @@ def album_mix_play_url(project_id: str) -> str:
 
 def album_file_token(*parts: object) -> str:
     return "-".join(
-        sanitize_filename(str(part)).replace("_", "-")
-        for part in parts
-        if str(part)
+        sanitize_filename(str(part)).replace("_", "-") for part in parts if str(part)
     )
 
 
@@ -1681,7 +1727,9 @@ def ensure_album_song_identity(
     if not storage_key and isinstance(versions, list) and versions:
         first_version = versions[0]
         if isinstance(first_version, dict):
-            stored_rel = str(first_version.get("stored_rel_path", "")).replace("\\", "/")
+            stored_rel = str(first_version.get("stored_rel_path", "")).replace(
+                "\\", "/"
+            )
             if stored_rel:
                 storage_key = Path(stored_rel).parent.name
     if not storage_key:
@@ -1701,7 +1749,10 @@ def normalize_album_project(project: Dict[str, object]) -> bool:
     existing_storage_keys: set[str] = set()
 
     for position, song in enumerate(
-        sorted((entry for entry in songs if isinstance(entry, dict)), key=lambda entry: int(entry.get("song_index", 0))),
+        sorted(
+            (entry for entry in songs if isinstance(entry, dict)),
+            key=lambda entry: int(entry.get("song_index", 0)),
+        ),
         start=1,
     ):
         original_song_index = int(song.get("song_index", 0) or 0)
@@ -1712,7 +1763,9 @@ def normalize_album_project(project: Dict[str, object]) -> bool:
         before_song_id = str(song.get("song_id", ""))
         before_storage_key = str(song.get("storage_key", ""))
         ensure_album_song_identity(project_id, song, existing_storage_keys)
-        if before_song_id != str(song.get("song_id", "")) or before_storage_key != str(song.get("storage_key", "")):
+        if before_song_id != str(song.get("song_id", "")) or before_storage_key != str(
+            song.get("storage_key", "")
+        ):
             changed = True
 
         versions = song.get("versions", [])
@@ -1724,7 +1777,9 @@ def normalize_album_project(project: Dict[str, object]) -> bool:
         if not song.get("title") and versions:
             first_version = versions[0]
             if isinstance(first_version, dict):
-                song["title"] = Path(str(first_version.get("source_name", f"Song {position}"))).stem
+                song["title"] = Path(
+                    str(first_version.get("source_name", f"Song {position}"))
+                ).stem
                 changed = True
 
         for version in versions:
@@ -1749,7 +1804,9 @@ def normalize_album_project(project: Dict[str, object]) -> bool:
                     version["storage_key"] = actual_storage_key
                     existing_storage_keys.add(actual_storage_key)
                     changed = True
-                stored_rel = str(resolved_stored.relative_to(REPO_ROOT / "audio-outputs")).replace("\\", "/")
+                stored_rel = str(
+                    resolved_stored.relative_to(REPO_ROOT / "audio-outputs")
+                ).replace("\\", "/")
                 if str(version.get("stored_rel_path", "")) != stored_rel:
                     version["stored_rel_path"] = stored_rel
                     changed = True
@@ -1763,12 +1820,20 @@ def normalize_album_project(project: Dict[str, object]) -> bool:
                 strict=True,
             )
             if resolved_prepared is not None:
-                prepared_rel = str(resolved_prepared.relative_to(REPO_ROOT / "audio-outputs")).replace("\\", "/")
+                prepared_rel = str(
+                    resolved_prepared.relative_to(REPO_ROOT / "audio-outputs")
+                ).replace("\\", "/")
                 if str(version.get("prepared_rel_path", "")) != prepared_rel:
                     version["prepared_rel_path"] = prepared_rel
                     changed = True
                 duration_seconds = read_audio_duration_seconds(resolved_prepared)
-                if abs(float(version.get("duration_seconds", 0.0) or 0.0) - float(duration_seconds)) > 0.01:
+                if (
+                    abs(
+                        float(version.get("duration_seconds", 0.0) or 0.0)
+                        - float(duration_seconds)
+                    )
+                    > 0.01
+                ):
                     version["duration_seconds"] = round(float(duration_seconds), 3)
                     changed = True
 
@@ -1817,10 +1882,14 @@ def create_album_song_slots(song_count: int) -> List[Dict[str, object]]:
     return slots
 
 
-def get_album_project_by_id(payload: Dict[str, object], project_id: str) -> Dict[str, object]:
+def get_album_project_by_id(
+    payload: Dict[str, object], project_id: str
+) -> Dict[str, object]:
     projects = payload.get("projects", [])
     if not isinstance(projects, list):
-        raise HTTPException(status_code=500, detail="Album project database is corrupted.")
+        raise HTTPException(
+            status_code=500, detail="Album project database is corrupted."
+        )
     for project in projects:
         if str(project.get("id", "")) == project_id:
             return project
@@ -1838,7 +1907,9 @@ def ensure_album_song(project: Dict[str, object], song_index: int) -> Dict[str, 
         if int(song.get("song_index", 0)) == int(song_index):
             return song
 
-    existing_indices = [int(entry.get("song_index", 0)) for entry in songs if isinstance(entry, dict)]
+    existing_indices = [
+        int(entry.get("song_index", 0)) for entry in songs if isinstance(entry, dict)
+    ]
     max_existing = max(existing_indices) if existing_indices else 0
     for idx in range(max_existing + 1, song_index + 1):
         songs.append(
@@ -1950,12 +2021,16 @@ def store_album_song_version(
         for entry in project.get("songs", [])
         if isinstance(entry, dict) and entry is not song and entry.get("storage_key")
     }
-    storage_key = str(song.get("storage_key", "")) or next_album_storage_key(existing_keys)
+    storage_key = str(song.get("storage_key", "")) or next_album_storage_key(
+        existing_keys
+    )
     song["storage_key"] = sanitize_filename(storage_key)
     if not song.get("song_id"):
         song["song_id"] = uuid4().hex[:12]
 
-    song_dir = album_song_storage_directory(project_id, str(song.get("storage_key", "")))
+    song_dir = album_song_storage_directory(
+        project_id, str(song.get("storage_key", ""))
+    )
     song_dir.mkdir(parents=True, exist_ok=True)
 
     source_name = f"v{version_number}_{safe_name}"
@@ -2025,7 +2100,9 @@ def delete_album_song(project: Dict[str, object], song_index: int) -> None:
         raise HTTPException(status_code=404, detail="Track not found.")
 
     project_id = str(project.get("id", ""))
-    target_dir = album_song_storage_directory(project_id, str(target_song.get("storage_key", "")))
+    target_dir = album_song_storage_directory(
+        project_id, str(target_song.get("storage_key", ""))
+    )
     if target_dir.exists():
         shutil.rmtree(target_dir, ignore_errors=True)
 
@@ -2034,13 +2111,19 @@ def delete_album_song(project: Dict[str, object], song_index: int) -> None:
         if current_index > target_index:
             song["song_index"] = int(current_index - 1)
 
-    project["songs"] = sorted(remaining, key=lambda entry: int(entry.get("song_index", 0)))
+    project["songs"] = sorted(
+        remaining, key=lambda entry: int(entry.get("song_index", 0))
+    )
     project["song_count"] = len(project["songs"])
     project["updated_at"] = utc_now_iso()
-    append_album_log(project, f"Deleted track {target_index} and renumbered the remaining tracks.")
+    append_album_log(
+        project, f"Deleted track {target_index} and renumbered the remaining tracks."
+    )
 
 
-def rebuild_album_preview(project: Dict[str, object], fade_seconds: float = 0.5) -> None:
+def rebuild_album_preview(
+    project: Dict[str, object], fade_seconds: float = 0.5
+) -> None:
     project_id = str(project.get("id", ""))
     songs = project.get("songs", [])
     if not isinstance(songs, list):
@@ -2145,9 +2228,13 @@ def serialize_album_project(project: Dict[str, object]) -> Dict[str, object]:
                         storage_key=str(song.get("storage_key", "")),
                         strict=True,
                     )
-                    duration_seconds = float(version_entry.get("duration_seconds", 0.0) or 0.0)
+                    duration_seconds = float(
+                        version_entry.get("duration_seconds", 0.0) or 0.0
+                    )
                     if duration_seconds <= 0.0 and resolved_prepared_path is not None:
-                        duration_seconds = read_audio_duration_seconds(resolved_prepared_path)
+                        duration_seconds = read_audio_duration_seconds(
+                            resolved_prepared_path
+                        )
                     version_token = album_file_token(
                         song.get("song_id", ""),
                         version_number,
@@ -2170,20 +2257,28 @@ def serialize_album_project(project: Dict[str, object]) -> Dict[str, object]:
                             "created_at": str(version_entry.get("created_at", "")),
                             "source_name": str(version_entry.get("source_name", "")),
                             "duration_seconds": float(duration_seconds),
-                            "stored_file_name": str(version_entry.get("stored_file_name", "")),
+                            "stored_file_name": str(
+                                version_entry.get("stored_file_name", "")
+                            ),
                             "url": version_url,
                             "prepared_url": prepared_url,
-                            "download_name": str(version_entry.get("stored_file_name", "")),
+                            "download_name": str(
+                                version_entry.get("stored_file_name", "")
+                            ),
                             "playable": bool(resolved_stored_path),
                         }
                     )
             latest_version = versions_payload[-1] if versions_payload else None
-            latest_play_url = str(latest_version.get("url", "")) if latest_version else ""
+            latest_play_url = (
+                str(latest_version.get("url", "")) if latest_version else ""
+            )
             songs_payload.append(
                 {
                     "song_index": int(song.get("song_index", 0)),
                     "song_id": str(song.get("song_id", "")),
-                    "title": str(song.get("title", f"Song {song.get('song_index', 0)}")),
+                    "title": str(
+                        song.get("title", f"Song {song.get('song_index', 0)}")
+                    ),
                     "versions": versions_payload,
                     "latest_version": latest_version,
                     "latest_version_url": latest_play_url,
@@ -2198,7 +2293,9 @@ def serialize_album_project(project: Dict[str, object]) -> Dict[str, object]:
         int(project.get("song_count", 0)),
         len(songs_payload),
     )
-    filled_songs = len([entry for entry in songs_payload if int(entry.get("version_count", 0)) > 0])
+    filled_songs = len(
+        [entry for entry in songs_payload if int(entry.get("version_count", 0)) > 0]
+    )
 
     return {
         "id": project_id,
@@ -2235,7 +2332,9 @@ def serialize_album_project_summary(project: Dict[str, object]) -> Dict[str, obj
     }
 
 
-def iter_file_bytes(path: Path, start: int, end: int, chunk_size: int = 1024 * 256) -> Iterator[bytes]:
+def iter_file_bytes(
+    path: Path, start: int, end: int, chunk_size: int = 1024 * 256
+) -> Iterator[bytes]:
     with path.open("rb") as handle:
         handle.seek(start)
         remaining = end - start + 1
@@ -2263,16 +2362,25 @@ def build_audio_stream_response(path: Path, request: Request) -> Response:
 
     match = re.match(r"bytes=(\d*)-(\d*)$", range_header)
     if not match:
-        return Response(status_code=416, headers={**common_headers, "Content-Range": f"bytes */{file_size}"})
+        return Response(
+            status_code=416,
+            headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
+        )
 
     start_text, end_text = match.groups()
     if start_text == "" and end_text == "":
-        return Response(status_code=416, headers={**common_headers, "Content-Range": f"bytes */{file_size}"})
+        return Response(
+            status_code=416,
+            headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
+        )
 
     if start_text == "":
         length = int(end_text)
         if length <= 0:
-            return Response(status_code=416, headers={**common_headers, "Content-Range": f"bytes */{file_size}"})
+            return Response(
+                status_code=416,
+                headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
+            )
         start = max(file_size - length, 0)
         end = file_size - 1
     else:
@@ -2280,7 +2388,10 @@ def build_audio_stream_response(path: Path, request: Request) -> Response:
         end = int(end_text) if end_text else file_size - 1
 
     if start < 0 or start >= file_size or end < start:
-        return Response(status_code=416, headers={**common_headers, "Content-Range": f"bytes */{file_size}"})
+        return Response(
+            status_code=416,
+            headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
+        )
 
     end = min(end, file_size - 1)
     content_length = end - start + 1
@@ -2316,7 +2427,9 @@ def _select_album_song_version(
 
     versions = target_song.get("versions", [])
     if not isinstance(versions, list) or not versions:
-        raise HTTPException(status_code=404, detail="That track has no playable versions yet.")
+        raise HTTPException(
+            status_code=404, detail="That track has no playable versions yet."
+        )
 
     selected_version: Optional[Dict[str, object]] = None
     if version is None:
@@ -2355,9 +2468,15 @@ def start_conversion_job(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         for index, input_path in enumerate(uploads, start=1):
-            output_mode = str(settings.get("output_mode", "single") or "single").strip().lower()
-            secondary_model_name = str(settings.get("secondary_model_name", "") or "").strip()
-            blend_percentage = max(0, min(int(settings.get("blend_percentage", 50) or 50), 100))
+            output_mode = (
+                str(settings.get("output_mode", "single") or "single").strip().lower()
+            )
+            secondary_model_name = str(
+                settings.get("secondary_model_name", "") or ""
+            ).strip()
+            blend_percentage = max(
+                0, min(int(settings.get("blend_percentage", 50) or 50), 100)
+            )
             set_job_state(
                 job_id,
                 completed_files=index - 1,
@@ -2375,7 +2494,9 @@ def start_conversion_job(
                 blend_work_dir = job_root / "blend-work" / f"{index:03d}"
                 blend_work_dir.mkdir(parents=True, exist_ok=True)
                 primary_render_path = blend_work_dir / f"{input_path.stem}_primary.wav"
-                secondary_render_path = blend_work_dir / f"{input_path.stem}_secondary.wav"
+                secondary_render_path = (
+                    blend_work_dir / f"{input_path.stem}_secondary.wav"
+                )
 
                 primary_metadata = backend.convert_file(
                     model_name,
@@ -2425,20 +2546,25 @@ def start_conversion_job(
                     "index_path": str(primary_metadata.get("index_path", "")),
                     "timings": {
                         "npy": round(
-                            float(primary_metadata["timings"]["npy"]) + float(secondary_metadata["timings"]["npy"]),
+                            float(primary_metadata["timings"]["npy"])
+                            + float(secondary_metadata["timings"]["npy"]),
                             2,
                         ),
                         "f0": round(
-                            float(primary_metadata["timings"]["f0"]) + float(secondary_metadata["timings"]["f0"]),
+                            float(primary_metadata["timings"]["f0"])
+                            + float(secondary_metadata["timings"]["f0"]),
                             2,
                         ),
                         "infer": round(
-                            float(primary_metadata["timings"]["infer"]) + float(secondary_metadata["timings"]["infer"]),
+                            float(primary_metadata["timings"]["infer"])
+                            + float(secondary_metadata["timings"]["infer"]),
                             2,
                         ),
                     },
                     "preprocess_applied": bool(primary_metadata["preprocess_applied"]),
-                    "preprocess_mode": str(primary_metadata.get("preprocess_mode", "off")),
+                    "preprocess_mode": str(
+                        primary_metadata.get("preprocess_mode", "off")
+                    ),
                 }
             else:
                 metadata = backend.convert_file(
@@ -2460,9 +2586,7 @@ def start_conversion_job(
                     crepe_hop_length=int(settings["crepe_hop_length"]),
                 )
 
-            relative_url = (
-                f"/downloads/simple-web/jobs/{job_id}/outputs/{output_name}"
-            )
+            relative_url = f"/downloads/simple-web/jobs/{job_id}/outputs/{output_name}"
             result = JobResult(
                 name=input_path.name,
                 url=relative_url,
@@ -2473,7 +2597,9 @@ def start_conversion_job(
                 preprocess_applied=bool(metadata["preprocess_applied"]),
                 preprocess_mode=str(metadata.get("preprocess_mode", "off")),
                 output_mode=output_mode,
-                secondary_model_name=secondary_model_name if output_mode == "blend" else "",
+                secondary_model_name=(
+                    secondary_model_name if output_mode == "blend" else ""
+                ),
                 blend_percentage=blend_percentage if output_mode == "blend" else 100,
             )
             with jobs_lock:
@@ -2519,12 +2645,23 @@ def start_master_conversion_job(
             output_dir = job_root / "outputs"
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            quality_preset = str(settings.get("quality_preset", "balanced") or "balanced")
+            quality_preset = str(
+                settings.get("quality_preset", "balanced") or "balanced"
+            )
             master_profile = str(settings.get("master_profile", "studio") or "studio")
             preferred_pipeline = "off"
-            blend_mode = str(settings.get("output_mode", "single") or "single").strip().lower() == "blend"
-            secondary_model_name = str(settings.get("secondary_model_name", "") or "").strip() if blend_mode else ""
-            blend_percentage = max(0, min(int(settings.get("blend_percentage", 50) or 50), 100))
+            blend_mode = (
+                str(settings.get("output_mode", "single") or "single").strip().lower()
+                == "blend"
+            )
+            secondary_model_name = (
+                str(settings.get("secondary_model_name", "") or "").strip()
+                if blend_mode
+                else ""
+            )
+            blend_percentage = max(
+                0, min(int(settings.get("blend_percentage", 50) or 50), 100)
+            )
 
             def progress_stage(progress_value: float) -> str:
                 progress_number = float(progress_value)
@@ -2555,8 +2692,11 @@ def start_master_conversion_job(
                     status="running",
                     stage=progress_stage(float(payload.get("progress", 0))),
                     progress=int(payload.get("progress", 0)),
-                    message=str(payload.get("message", "")) or "Master Conversion is running.",
-                    best_similarity_score=float(payload.get("best_similarity_score", 0.0)),
+                    message=str(payload.get("message", ""))
+                    or "Master Conversion is running.",
+                    best_similarity_score=float(
+                        payload.get("best_similarity_score", 0.0)
+                    ),
                     best_word_report=str(payload.get("best_word_report", "")),
                     best_letter_report=str(payload.get("best_letter_report", "")),
                     repair_attempts=int(payload.get("repair_attempts", 0)),
@@ -2587,16 +2727,32 @@ def start_master_conversion_job(
                 phrase_choices=list(metadata.get("phrase_choices", [])),
                 final_url=artifact_url(Path(str(metadata["output_path"]))),
                 final_download_name=Path(str(metadata["output_path"])).name,
-                reconstructed_lead_url=artifact_url(Path(str(metadata["reconstructed_lead_path"]))),
-                reconstructed_lead_download_name=Path(str(metadata["reconstructed_lead_path"])).name,
-                reconstructed_removed_url=artifact_url(Path(str(metadata["reconstructed_removed_path"]))),
-                reconstructed_removed_download_name=Path(str(metadata["reconstructed_removed_path"])).name,
-                raw_conversion_url=artifact_url(Path(str(metadata["raw_conversion_path"]))),
-                raw_conversion_download_name=Path(str(metadata["raw_conversion_path"])).name,
+                reconstructed_lead_url=artifact_url(
+                    Path(str(metadata["reconstructed_lead_path"]))
+                ),
+                reconstructed_lead_download_name=Path(
+                    str(metadata["reconstructed_lead_path"])
+                ).name,
+                reconstructed_removed_url=artifact_url(
+                    Path(str(metadata["reconstructed_removed_path"]))
+                ),
+                reconstructed_removed_download_name=Path(
+                    str(metadata["reconstructed_removed_path"])
+                ).name,
+                raw_conversion_url=artifact_url(
+                    Path(str(metadata["raw_conversion_path"]))
+                ),
+                raw_conversion_download_name=Path(
+                    str(metadata["raw_conversion_path"])
+                ).name,
                 repaired_url=artifact_url(Path(str(metadata["repaired_path"]))),
                 repaired_download_name=Path(str(metadata["repaired_path"])).name,
-                final_removed_url=artifact_url(Path(str(metadata["final_removed_path"]))),
-                final_removed_download_name=Path(str(metadata["final_removed_path"])).name,
+                final_removed_url=artifact_url(
+                    Path(str(metadata["final_removed_path"]))
+                ),
+                final_removed_download_name=Path(
+                    str(metadata["final_removed_path"])
+                ).name,
                 metadata_url=artifact_url(Path(str(metadata["metadata_path"]))),
                 metadata_download_name=Path(str(metadata["metadata_path"])).name,
                 zip_url=artifact_url(zip_path),
@@ -2695,16 +2851,26 @@ def start_generate_job(
                 job_id,
                 progress=min(
                     86,
-                    40 + int(round(max(0.0, min(float(payload.get("progress", 0.0)), 100.0)) * 0.46)),
+                    40
+                    + int(
+                        round(
+                            max(0.0, min(float(payload.get("progress", 0.0)), 100.0))
+                            * 0.46
+                        )
+                    ),
                 ),
                 message=str(payload.get("message", "")) or "Repairing pronunciation...",
-                repair_attempts=int(payload.get("repair_attempts", payload.get("variants_tested", 0))),
+                repair_attempts=int(
+                    payload.get("repair_attempts", payload.get("variants_tested", 0))
+                ),
                 repaired_word_count=int(payload.get("repaired_word_count", 0)),
                 best_similarity_score=float(payload.get("best_similarity_score", 0.0)),
                 best_word_report=str(payload.get("best_word_report", "")),
                 best_letter_report=str(payload.get("best_letter_report", "")),
                 detected_word_indices=list(payload.get("detected_word_indices", [])),
-                regeneration_available=bool(payload.get("regeneration_available", False)),
+                regeneration_available=bool(
+                    payload.get("regeneration_available", False)
+                ),
                 regeneration_reason=str(payload.get("regeneration_reason", "")),
             ),
         )
@@ -2723,7 +2889,9 @@ def start_generate_job(
             patch_info: Dict[str, object],
         ) -> Path:
             group_index = int(patch_info.get("group_index", 0))
-            patch_work_dir = job_root / "reference-phrase-patch" / f"group_{group_index:02d}"
+            patch_work_dir = (
+                job_root / "reference-phrase-patch" / f"group_{group_index:02d}"
+            )
             patch_work_dir.mkdir(parents=True, exist_ok=True)
             patch_output_path = Path(rendered_patch_path)
             backend.convert_file(
@@ -2762,11 +2930,20 @@ def start_generate_job(
                 job_id,
                 progress=min(
                     94,
-                    72 + int(round(max(0.0, min(float(payload.get("progress", 0.0)), 100.0)) * 0.22)),
+                    72
+                    + int(
+                        round(
+                            max(0.0, min(float(payload.get("progress", 0.0)), 100.0))
+                            * 0.22
+                        )
+                    ),
                 ),
-                message=str(payload.get("message", "")) or "Repairing weak lyric regions...",
+                message=str(payload.get("message", ""))
+                or "Repairing weak lyric regions...",
                 repair_attempts=int(repair_metadata.get("repair_attempts", 0))
-                + int(payload.get("repair_attempts", payload.get("variants_tested", 0))),
+                + int(
+                    payload.get("repair_attempts", payload.get("variants_tested", 0))
+                ),
                 repaired_word_count=max(
                     int(repair_metadata.get("repaired_word_count", 0)),
                     int(payload.get("repaired_word_count", 0)),
@@ -2775,7 +2952,9 @@ def start_generate_job(
                 best_word_report=str(payload.get("best_word_report", "")),
                 best_letter_report=str(payload.get("best_letter_report", "")),
                 detected_word_indices=list(payload.get("detected_word_indices", [])),
-                regeneration_available=bool(repair_metadata.get("regeneration_available", False)),
+                regeneration_available=bool(
+                    repair_metadata.get("regeneration_available", False)
+                ),
                 regeneration_reason=str(repair_metadata.get("regeneration_reason", "")),
             ),
             blend_strength=0.86 if quality_preset == "clean" else 0.82,
@@ -2828,18 +3007,32 @@ def start_generate_job(
                 int(repair_metadata.get("repaired_word_count", 0)),
                 int(reference_phrase_metadata.get("repaired_word_count", 0)),
             ),
-            "best_similarity_score": float(reference_phrase_metadata.get("best_similarity_score", 0.0)),
-            "best_word_report": str(reference_phrase_metadata.get("best_word_report", "")),
-            "best_letter_report": str(reference_phrase_metadata.get("best_letter_report", "")),
-            "detected_word_indices": list(reference_phrase_metadata.get("detected_word_indices", [])),
-            "regeneration_available": bool(repair_metadata.get("regeneration_available", False)),
+            "best_similarity_score": float(
+                reference_phrase_metadata.get("best_similarity_score", 0.0)
+            ),
+            "best_word_report": str(
+                reference_phrase_metadata.get("best_word_report", "")
+            ),
+            "best_letter_report": str(
+                reference_phrase_metadata.get("best_letter_report", "")
+            ),
+            "detected_word_indices": list(
+                reference_phrase_metadata.get("detected_word_indices", [])
+            ),
+            "regeneration_available": bool(
+                repair_metadata.get("regeneration_available", False)
+            ),
             "regeneration_reason": str(repair_metadata.get("regeneration_reason", "")),
-            "reference_phrase_patch_attempts": int(reference_phrase_metadata.get("repair_attempts", 0)),
+            "reference_phrase_patch_attempts": int(
+                reference_phrase_metadata.get("repair_attempts", 0)
+            ),
             "repair_source_name": raw_output_path.name,
             "sample_rate": int(metadata.get("sample_rate", 0)),
             "timings": metadata.get("timings", {}),
         }
-        metadata_path.write_text(json.dumps(metadata_payload, indent=2), encoding="utf-8")
+        metadata_path.write_text(
+            json.dumps(metadata_payload, indent=2), encoding="utf-8"
+        )
 
         set_generate_job_state(
             job_id,
@@ -2856,11 +3049,19 @@ def start_generate_job(
                 int(repair_metadata.get("repaired_word_count", 0)),
                 int(reference_phrase_metadata.get("repaired_word_count", 0)),
             ),
-            best_similarity_score=float(reference_phrase_metadata.get("best_similarity_score", 0.0)),
+            best_similarity_score=float(
+                reference_phrase_metadata.get("best_similarity_score", 0.0)
+            ),
             best_word_report=str(reference_phrase_metadata.get("best_word_report", "")),
-            best_letter_report=str(reference_phrase_metadata.get("best_letter_report", "")),
-            detected_word_indices=list(reference_phrase_metadata.get("detected_word_indices", [])),
-            regeneration_available=bool(repair_metadata.get("regeneration_available", False)),
+            best_letter_report=str(
+                reference_phrase_metadata.get("best_letter_report", "")
+            ),
+            detected_word_indices=list(
+                reference_phrase_metadata.get("detected_word_indices", [])
+            ),
+            regeneration_available=bool(
+                repair_metadata.get("regeneration_available", False)
+            ),
             regeneration_reason=str(repair_metadata.get("regeneration_reason", "")),
             result_url=f"/downloads/simple-web/generate/{job_id}/outputs/{final_output_path.name}",
             download_name=final_output_path.name,
@@ -2909,13 +3110,16 @@ def start_training_job(
     start_phase = str(settings.get("start_phase", "auto") or "auto").strip()
     warmup_stage_epochs = max(0, int(settings.get("warmup_stage_epochs", 200)))
     bridge_stage_epochs = max(0, int(settings.get("bridge_stage_epochs", 500)))
-    full_diversity_stage_epochs = max(0, int(settings.get("full_diversity_stage_epochs", 500)))
+    full_diversity_stage_epochs = max(
+        0, int(settings.get("full_diversity_stage_epochs", 500))
+    )
 
     def map_guided_training_progress(raw_progress: int) -> int:
         normalized = max(0, min(int(raw_progress), 100))
         start = 32
         end = 94 if output_mode == "pipa-logic-only" else 66
         return int(round(start + ((normalized / 100.0) * (end - start))))
+
     try:
         persona_runtime_session = _start_persona_runtime("training", job_id)
         set_training_job_state(
@@ -2926,21 +3130,11 @@ def start_training_job(
             progress=4,
         )
 
-        audio_paths = [
-            path
-            for path in sorted(dataset_dir.iterdir())
-            if path.is_file()
-        ]
+        audio_paths = [path for path in sorted(dataset_dir.iterdir()) if path.is_file()]
         transcript_paths = [
-            path
-            for path in sorted(transcript_dir.iterdir())
-            if path.is_file()
+            path for path in sorted(transcript_dir.iterdir()) if path.is_file()
         ]
-        plan_paths = [
-            path
-            for path in sorted(plan_dir.iterdir())
-            if path.is_file()
-        ]
+        plan_paths = [path for path in sorted(plan_dir.iterdir()) if path.is_file()]
         resume_bundle = (
             backend.pipa_store.resolve_bundle(resume_selection_name)
             if resume_selection_name
@@ -2967,7 +3161,9 @@ def start_training_job(
                 raise FileNotFoundError(
                     f"Resume checkpoint for '{resume_selection_name}' is missing."
                 )
-            raw_resume_report = str(resume_bundle.get("guided_regeneration_report_path", "") or "").strip()
+            raw_resume_report = str(
+                resume_bundle.get("guided_regeneration_report_path", "") or ""
+            ).strip()
             if raw_resume_report:
                 candidate_report = Path(raw_resume_report)
                 if candidate_report.exists():
@@ -3037,7 +3233,9 @@ def start_training_job(
             full_diversity_stage_epochs=full_diversity_stage_epochs,
         )
 
-        guided_dataset_features_dir = Path(str(prep_metadata["guided_svs_dataset_dir"])) / "features"
+        guided_dataset_features_dir = (
+            Path(str(prep_metadata["guided_svs_dataset_dir"])) / "features"
+        )
         if guided_dataset_features_dir.exists():
             shutil.rmtree(guided_dataset_features_dir, ignore_errors=True)
 
@@ -3067,7 +3265,12 @@ def start_training_job(
                 "index_built": "0",
                 "index_summary": "",
                 "train_log_path": "",
-                "stopped_early": "1" if cancel_event.is_set() or bool(guided_metadata.get("stopped_early", False)) else "0",
+                "stopped_early": (
+                    "1"
+                    if cancel_event.is_set()
+                    or bool(guided_metadata.get("stopped_early", False))
+                    else "0"
+                ),
             }
         else:
             metadata = trainer.run_training(
@@ -3106,10 +3309,12 @@ def start_training_job(
             prep_metadata=prep_metadata,
             regeneration_metadata=guided_metadata,
         )
-        stopped_early = bool(int(str(metadata.get("stopped_early", "0") or "0"))) or bool(
-            guided_metadata.get("stopped_early", False)
-        )
-        guided_hardware_summary = str(guided_metadata.get("hardware_summary", "")).strip()
+        stopped_early = bool(
+            int(str(metadata.get("stopped_early", "0") or "0"))
+        ) or bool(guided_metadata.get("stopped_early", False))
+        guided_hardware_summary = str(
+            guided_metadata.get("hardware_summary", "")
+        ).strip()
 
         set_training_job_state(
             job_id,
@@ -3146,25 +3351,57 @@ def start_training_job(
             pipa_manifest_path=str(package_metadata["manifest_path"]),
             phoneme_profile_path=str(package_metadata["phoneme_profile_path"]),
             rebuild_profile_path=str(package_metadata.get("rebuild_profile_path", "")),
-            rebuild_clip_reports_path=str(package_metadata.get("rebuild_clip_reports_path", "")),
+            rebuild_clip_reports_path=str(
+                package_metadata.get("rebuild_clip_reports_path", "")
+            ),
             training_report_path=str(package_metadata["training_report_path"]),
-            reference_bank_index_path=str(package_metadata["reference_bank_index_path"]),
-            guided_regeneration_path=str(package_metadata.get("guided_regeneration_path", "")),
-            guided_regeneration_config_path=str(package_metadata.get("guided_regeneration_config_path", "")),
-            guided_regeneration_report_path=str(package_metadata.get("guided_regeneration_report_path", "")),
-            guided_regeneration_preview_path=str(package_metadata.get("guided_regeneration_preview_path", "")),
-            guided_regeneration_target_preview_path=str(package_metadata.get("guided_regeneration_target_preview_path", "")),
-            guided_regeneration_best_val_l1=float(guided_metadata.get("best_val_l1", 0.0)),
-            guided_regeneration_best_val_total=float(guided_metadata.get("best_val_total", 0.0)),
+            reference_bank_index_path=str(
+                package_metadata["reference_bank_index_path"]
+            ),
+            guided_regeneration_path=str(
+                package_metadata.get("guided_regeneration_path", "")
+            ),
+            guided_regeneration_config_path=str(
+                package_metadata.get("guided_regeneration_config_path", "")
+            ),
+            guided_regeneration_report_path=str(
+                package_metadata.get("guided_regeneration_report_path", "")
+            ),
+            guided_regeneration_preview_path=str(
+                package_metadata.get("guided_regeneration_preview_path", "")
+            ),
+            guided_regeneration_target_preview_path=str(
+                package_metadata.get("guided_regeneration_target_preview_path", "")
+            ),
+            guided_regeneration_best_val_l1=float(
+                guided_metadata.get("best_val_l1", 0.0)
+            ),
+            guided_regeneration_best_val_total=float(
+                guided_metadata.get("best_val_total", 0.0)
+            ),
             guided_regeneration_best_epoch=int(guided_metadata.get("best_epoch", 0)),
-            guided_regeneration_best_phone_accuracy=float(guided_metadata.get("best_phone_accuracy", 0.0)),
-            guided_regeneration_best_lyric_phone_accuracy=float(guided_metadata.get("best_lyric_phone_accuracy", 0.0)),
-            guided_regeneration_best_vuv_accuracy=float(guided_metadata.get("best_vuv_accuracy", 0.0)),
-            guided_regeneration_plateau_epochs=int(guided_metadata.get("plateau_epochs", 0)),
-            guided_regeneration_hardware_summary=str(guided_metadata.get("hardware_summary", "")),
-            guided_regeneration_quality_summary=str(guided_metadata.get("quality_summary", "")),
+            guided_regeneration_best_phone_accuracy=float(
+                guided_metadata.get("best_phone_accuracy", 0.0)
+            ),
+            guided_regeneration_best_lyric_phone_accuracy=float(
+                guided_metadata.get("best_lyric_phone_accuracy", 0.0)
+            ),
+            guided_regeneration_best_vuv_accuracy=float(
+                guided_metadata.get("best_vuv_accuracy", 0.0)
+            ),
+            guided_regeneration_plateau_epochs=int(
+                guided_metadata.get("plateau_epochs", 0)
+            ),
+            guided_regeneration_hardware_summary=str(
+                guided_metadata.get("hardware_summary", "")
+            ),
+            guided_regeneration_quality_summary=str(
+                guided_metadata.get("quality_summary", "")
+            ),
             guided_regeneration_last_epoch=int(guided_metadata.get("last_epoch", 0)),
-            guided_regeneration_sample_count=int(guided_metadata.get("sample_count", 0)),
+            guided_regeneration_sample_count=int(
+                guided_metadata.get("sample_count", 0)
+            ),
             transcript_manifest_path=str(prep_metadata["transcript_manifest_path"]),
             alignment_tolerance=str(prep_metadata["alignment_tolerance"]),
             phoneme_mode=str(prep_metadata["phoneme_mode"]),
@@ -3176,7 +3413,9 @@ def start_training_job(
             training_plan_path=str(prep_metadata.get("training_plan_path", "")),
             base_voice_clip_count=int(prep_metadata.get("base_voice_clip_count", 0)),
             paired_song_count=int(prep_metadata.get("paired_song_count", 0)),
-            depersonafied_variant_count=int(prep_metadata.get("depersonafied_variant_count", 0)),
+            depersonafied_variant_count=int(
+                prep_metadata.get("depersonafied_variant_count", 0)
+            ),
         )
     except InterruptedError as exc:
         set_training_job_state(
@@ -3303,7 +3542,13 @@ def start_isolator_job(
                     message=f"{message} ({current_index}/{total_files})",
                     progress=min(
                         end,
-                        start + int(round((max(0, min(progress, 100)) / 100.0) * max(1, end - start))),
+                        start
+                        + int(
+                            round(
+                                (max(0, min(progress, 100)) / 100.0)
+                                * max(1, end - start)
+                            )
+                        ),
                     ),
                     current_file=current_name,
                 ),
@@ -3333,7 +3578,9 @@ def start_isolator_job(
             current_file="backing vocal output",
         )
         backing_output_path = output_dir / "backing_vocal.wav"
-        combined_backing_path = combine_audio_files(isolated_backing_paths, backing_output_path)
+        combined_backing_path = combine_audio_files(
+            isolated_backing_paths, backing_output_path
+        )
         if combined_backing_path != backing_output_path:
             prepare_audio_for_concat(combined_backing_path, backing_output_path)
 
@@ -3465,7 +3712,8 @@ def start_optimize_job(
 
             prepared_path = prepare_audio_for_concat(
                 input_path,
-                outputs_dir / f"{index:02d}_{sanitize_filename(input_path.stem)}_prepared.wav",
+                outputs_dir
+                / f"{index:02d}_{sanitize_filename(input_path.stem)}_prepared.wav",
             )
             prepared_paths.append(prepared_path)
             analysis = optimizer_engine.analyze_candidate(prepared_path, lyrics)
@@ -3502,7 +3750,9 @@ def start_optimize_job(
                 current_file=input_path.name,
             )
 
-        rankings_sorted = sorted(rankings, key=lambda item: float(item["score"]), reverse=True)
+        rankings_sorted = sorted(
+            rankings, key=lambda item: float(item["score"]), reverse=True
+        )
         for rank, entry in enumerate(rankings_sorted, start=1):
             entry["rank"] = rank
 
@@ -3595,7 +3845,9 @@ def start_api_compose_job(
             for key, value in fields.items():
                 chunks.append(f"--{boundary}\r\n".encode("utf-8"))
                 chunks.append(
-                    f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8")
+                    f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode(
+                        "utf-8"
+                    )
                 )
                 chunks.append(str(value).encode("utf-8"))
                 chunks.append(b"\r\n")
@@ -3633,7 +3885,9 @@ def start_api_compose_job(
         vocal_language = str(extras.get("vocal_language", "en")).strip() or "en"
         inference_steps = max(4, min(int(extras.get("inference_steps", 8)), 200))
         audio_format = str(extras.get("audio_format", "wav")).strip() or "wav"
-        poll_interval = max(0.5, min(float(extras.get("poll_interval_seconds", 2.0)), 10.0))
+        poll_interval = max(
+            0.5, min(float(extras.get("poll_interval_seconds", 2.0)), 10.0)
+        )
         max_wait_seconds = max(15, min(int(extras.get("max_wait_seconds", 720)), 3600))
 
         request_fields: Dict[str, str] = {
@@ -3731,7 +3985,9 @@ def start_api_compose_job(
             query_json = json.loads(query_text)
             last_query_json = query_json if isinstance(query_json, dict) else {}
             query_data = query_json.get("data", [])
-            task_state = query_data[0] if isinstance(query_data, list) and query_data else {}
+            task_state = (
+                query_data[0] if isinstance(query_data, list) and query_data else {}
+            )
             status_value = int(task_state.get("status", 0))
             result_payload = task_state.get("result", "[]")
             parsed_results: List[Dict[str, object]] = []
@@ -3739,18 +3995,24 @@ def start_api_compose_job(
                 try:
                     loaded = json.loads(result_payload)
                     if isinstance(loaded, list):
-                        parsed_results = [item for item in loaded if isinstance(item, dict)]
+                        parsed_results = [
+                            item for item in loaded if isinstance(item, dict)
+                        ]
                 except json.JSONDecodeError:
                     parsed_results = []
             elif isinstance(result_payload, list):
-                parsed_results = [item for item in result_payload if isinstance(item, dict)]
+                parsed_results = [
+                    item for item in result_payload if isinstance(item, dict)
+                ]
 
             if status_value == 1:
                 for item in parsed_results:
                     file_url = str(item.get("file", "")).strip()
                     if not file_url:
                         continue
-                    if file_url.startswith("http://") or file_url.startswith("https://"):
+                    if file_url.startswith("http://") or file_url.startswith(
+                        "https://"
+                    ):
                         audio_urls.append(file_url)
                     elif file_url.startswith("/"):
                         audio_urls.append(f"{base_url}{file_url}")
@@ -3885,14 +4147,22 @@ def start_touchup_job(
                     job_id,
                     progress=int(payload.get("progress", 0)),
                     message=str(payload.get("message", "")),
-                    best_similarity_score=float(payload.get("best_similarity_score", 0.0)),
+                    best_similarity_score=float(
+                        payload.get("best_similarity_score", 0.0)
+                    ),
                     best_word_report=str(payload.get("best_word_report", "")),
                     best_letter_report=str(payload.get("best_letter_report", "")),
                     variants_tested=int(payload.get("variants_tested", 0)),
-                    repair_attempts=int(payload.get("repair_attempts", payload.get("variants_tested", 0))),
+                    repair_attempts=int(
+                        payload.get(
+                            "repair_attempts", payload.get("variants_tested", 0)
+                        )
+                    ),
                     repaired_word_count=int(payload.get("repaired_word_count", 0)),
                     batch_index=int(payload.get("batch_index", 0)),
-                    detected_word_indices=list(payload.get("detected_word_indices", [])),
+                    detected_word_indices=list(
+                        payload.get("detected_word_indices", [])
+                    ),
                     stop_requested=cancel_event.is_set(),
                 ),
             )
@@ -3912,15 +4182,25 @@ def start_touchup_job(
                     job_id,
                     progress=int(payload.get("progress", 0)),
                     message=str(payload.get("message", "")),
-                    best_similarity_score=float(payload.get("best_similarity_score", 0.0)),
+                    best_similarity_score=float(
+                        payload.get("best_similarity_score", 0.0)
+                    ),
                     best_word_report=str(payload.get("best_word_report", "")),
                     best_letter_report=str(payload.get("best_letter_report", "")),
                     variants_tested=int(payload.get("variants_tested", 0)),
-                    repair_attempts=int(payload.get("repair_attempts", payload.get("variants_tested", 0))),
+                    repair_attempts=int(
+                        payload.get(
+                            "repair_attempts", payload.get("variants_tested", 0)
+                        )
+                    ),
                     repaired_word_count=int(payload.get("repaired_word_count", 0)),
                     batch_index=int(payload.get("batch_index", 0)),
-                    detected_word_indices=list(payload.get("detected_word_indices", [])),
-                    regeneration_available=bool(payload.get("regeneration_available", False)),
+                    detected_word_indices=list(
+                        payload.get("detected_word_indices", [])
+                    ),
+                    regeneration_available=bool(
+                        payload.get("regeneration_available", False)
+                    ),
                     regeneration_reason=str(payload.get("regeneration_reason", "")),
                     detected_only=bool(payload.get("detected_only", False)),
                     stop_requested=cancel_event.is_set(),
@@ -3947,7 +4227,9 @@ def start_touchup_job(
             progress=100,
             batch_index=int(metadata.get("batch_index", 0)),
             variants_tested=int(metadata.get("variants_tested", 0)),
-            repair_attempts=int(metadata.get("repair_attempts", metadata.get("variants_tested", 0))),
+            repair_attempts=int(
+                metadata.get("repair_attempts", metadata.get("variants_tested", 0))
+            ),
             repaired_word_count=int(metadata.get("repaired_word_count", 0)),
             best_similarity_score=float(metadata.get("best_similarity_score", 0.0)),
             best_word_report=str(metadata.get("best_word_report", "")),
@@ -3968,13 +4250,17 @@ def start_touchup_job(
                 else ""
             ),
             removed_download_name=(
-                Path(str(metadata["removed_path"])).name if metadata.get("removed_path") else ""
+                Path(str(metadata["removed_path"])).name
+                if metadata.get("removed_path")
+                else ""
             ),
             source_rms_db=float(metadata["source_rms_db"]),
             output_rms_db=float(metadata["output_rms_db"]),
             kept_segment_count=int(metadata.get("kept_segment_count", 0)),
             kept_duration_seconds=float(metadata.get("kept_duration_seconds", 0.0)),
-            removed_duration_seconds=float(metadata.get("removed_duration_seconds", 0.0)),
+            removed_duration_seconds=float(
+                metadata.get("removed_duration_seconds", 0.0)
+            ),
         )
     except Exception:
         set_touchup_job_state(
@@ -4170,7 +4456,7 @@ async def create_album_project(
     }
     append_album_log(
         project,
-        f"Created project \"{clean_name}\".",
+        f'Created project "{clean_name}".',
     )
 
     with albums_lock:
@@ -4227,7 +4513,9 @@ async def upload_album_songs_bulk(
     files: List[UploadFile] = File(...),
 ) -> Dict[str, object]:
     if not files:
-        raise HTTPException(status_code=400, detail="Please upload one or more audio files.")
+        raise HTTPException(
+            status_code=400, detail="Please upload one or more audio files."
+        )
 
     prepared_uploads: List[tuple[str, bytes]] = []
     for upload in files:
@@ -4268,7 +4556,9 @@ async def upload_album_songs_bulk(
             uploaded_count += 1
 
         if uploaded_count <= 0:
-            raise HTTPException(status_code=400, detail="No usable audio files were uploaded.")
+            raise HTTPException(
+                status_code=400, detail="No usable audio files were uploaded."
+            )
 
         rebuild_album_preview(
             project=project,
@@ -4301,7 +4591,9 @@ async def reorder_album_tracks(project_id: str, request: Request) -> Dict[str, o
     payload = await request.json()
     ordered_indices = payload.get("song_indices", [])
     if not isinstance(ordered_indices, list) or not ordered_indices:
-        raise HTTPException(status_code=400, detail="Provide a non-empty song_indices array.")
+        raise HTTPException(
+            status_code=400, detail="Provide a non-empty song_indices array."
+        )
 
     with albums_lock:
         db_payload = load_album_db()
@@ -4309,7 +4601,9 @@ async def reorder_album_tracks(project_id: str, request: Request) -> Dict[str, o
         normalize_album_project(project)
         songs = project.get("songs", [])
         if not isinstance(songs, list) or not songs:
-            raise HTTPException(status_code=400, detail="This album has no tracks to reorder.")
+            raise HTTPException(
+                status_code=400, detail="This album has no tracks to reorder."
+            )
 
         existing_by_index = {
             int(song.get("song_index", 0)): song
@@ -4319,7 +4613,10 @@ async def reorder_album_tracks(project_id: str, request: Request) -> Dict[str, o
         requested = [int(value) for value in ordered_indices]
         existing_keys = sorted(existing_by_index.keys())
         if sorted(requested) != existing_keys:
-            raise HTTPException(status_code=400, detail="song_indices must include every current track exactly once.")
+            raise HTTPException(
+                status_code=400,
+                detail="song_indices must include every current track exactly once.",
+            )
 
         reordered: List[Dict[str, object]] = []
         for new_position, old_index in enumerate(requested, start=1):
@@ -4345,7 +4642,9 @@ async def reorder_album_tracks(project_id: str, request: Request) -> Dict[str, o
 
 
 @app.delete("/api/albums/projects/{project_id}/songs/{song_index}")
-async def delete_album_song_route(project_id: str, song_index: int) -> Dict[str, object]:
+async def delete_album_song_route(
+    project_id: str, song_index: int
+) -> Dict[str, object]:
     with albums_lock:
         db_payload = load_album_db()
         project = get_album_project_by_id(db_payload, project_id)
@@ -4436,7 +4735,9 @@ def api_compose_provider_health(endpoint_url: str) -> Dict[str, object]:
     if base_url.endswith("/query_result"):
         base_url = base_url[: -len("/query_result")]
     if not base_url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="Endpoint URL must start with http:// or https://.")
+        raise HTTPException(
+            status_code=400, detail="Endpoint URL must start with http:// or https://."
+        )
 
     health_url = f"{base_url}/health"
     try:
@@ -4470,7 +4771,9 @@ def stop_touchup_job(job_id: str) -> Dict[str, object]:
     with touchup_stop_events_lock:
         stop_event = touchup_stop_events.get(job_id)
         if stop_event is None:
-            raise HTTPException(status_code=409, detail="That touch-up job is not currently running.")
+            raise HTTPException(
+                status_code=409, detail="That touch-up job is not currently running."
+            )
         stop_event.set()
     set_touchup_job_state(
         job_id,
@@ -4497,7 +4800,9 @@ def training_packages() -> Dict[str, object]:
             {
                 "name": str(bundle.get("name", "")),
                 "label": str(bundle.get("label", bundle.get("name", ""))),
-                "package_mode": str(bundle.get("package_mode", "persona-v1") or "persona-v1"),
+                "package_mode": str(
+                    bundle.get("package_mode", "persona-v1") or "persona-v1"
+                ),
                 "manifest_path": str(manifest_path),
                 "package_dir": str(package_dir),
             }
@@ -4509,14 +4814,21 @@ def training_packages() -> Dict[str, object]:
 def download_training_package(selection_name: str) -> FileResponse:
     bundle = backend.pipa_store.resolve_bundle(str(selection_name or "").strip())
     if bundle is None:
-        raise HTTPException(status_code=404, detail="Selected Persona package was not found.")
+        raise HTTPException(
+            status_code=404, detail="Selected Persona package was not found."
+        )
 
     manifest_path = Path(str(bundle.get("manifest_path", "") or "").strip())
     if not manifest_path.exists():
-        raise HTTPException(status_code=404, detail="Selected Persona package is missing its manifest.")
+        raise HTTPException(
+            status_code=404, detail="Selected Persona package is missing its manifest."
+        )
 
     package_dir = manifest_path.parent
-    safe_label = sanitize_filename(str(bundle.get("label", bundle.get("name", package_dir.name))) or package_dir.name)
+    safe_label = sanitize_filename(
+        str(bundle.get("label", bundle.get("name", package_dir.name)))
+        or package_dir.name
+    )
     download_root = TRAINING_ROOT / "_package_downloads"
     download_root.mkdir(parents=True, exist_ok=True)
     zip_path = download_root / f"{safe_label or package_dir.name}.zip"
@@ -4540,12 +4852,18 @@ def rebuild_options() -> Dict[str, object]:
             {
                 "name": str(bundle.get("name", "")),
                 "label": str(bundle.get("label", bundle.get("name", ""))),
-                "package_mode": str(bundle.get("package_mode", "pipa-full") or "pipa-full"),
+                "package_mode": str(
+                    bundle.get("package_mode", "pipa-full") or "pipa-full"
+                ),
                 "has_backing_model": bool(bundle.get("has_backing_model", False)),
                 "rvc_model_name": str(bundle.get("rvc_model_name", "") or ""),
                 "reference_word_count": int(bundle.get("reference_word_count", 0) or 0),
-                "reference_phrase_count": int(bundle.get("reference_phrase_count", 0) or 0),
-                "alignment_tolerance": str(bundle.get("alignment_tolerance", "balanced") or "balanced"),
+                "reference_phrase_count": int(
+                    bundle.get("reference_phrase_count", 0) or 0
+                ),
+                "alignment_tolerance": str(
+                    bundle.get("alignment_tolerance", "balanced") or "balanced"
+                ),
                 "rebuild_profile_path": rebuild_profile_path,
                 "reference_bank_path": reference_bank_path,
             }
@@ -4572,14 +4890,17 @@ def stop_training_job(job_id: str) -> Dict[str, object]:
     with training_stop_events_lock:
         stop_event = training_stop_events.get(job_id)
         if stop_event is None:
-            raise HTTPException(status_code=404, detail="Training stop control not found.")
+            raise HTTPException(
+                status_code=404, detail="Training stop control not found."
+            )
         stop_event.set()
     set_training_job_state(
         job_id,
         stop_requested=True,
         message=(
             "Stop requested. Finishing the current paired voice-builder chunk..."
-            if job.stage in {"pipa-svs-data", "persona-base", "persona-paired", "persona-dataset"}
+            if job.stage
+            in {"pipa-svs-data", "persona-base", "persona-paired", "persona-dataset"}
             else (
                 "Stop requested. Finishing the current alignment chunk..."
                 if job.output_mode in {"pipa-logic-only", "persona-v1"}
@@ -4602,7 +4923,9 @@ async def create_rebuild_plan(
         raise HTTPException(status_code=400, detail="Pick a PIPA package first.")
     bundle = backend.pipa_store.resolve_bundle(package_name)
     if bundle is None:
-        raise HTTPException(status_code=400, detail="Selected PIPA package does not exist.")
+        raise HTTPException(
+            status_code=400, detail="Selected PIPA package does not exist."
+        )
     reference_bank_path = Path(str(bundle.get("reference_bank_path", "") or "").strip())
     if not reference_bank_path.exists():
         raise HTTPException(
@@ -4649,10 +4972,14 @@ async def create_rebuild_plan(
     )
 
     rebuild_profile_payload: Dict[str, object] = {}
-    rebuild_profile_path = Path(str(bundle.get("rebuild_profile_path", "") or "").strip())
+    rebuild_profile_path = Path(
+        str(bundle.get("rebuild_profile_path", "") or "").strip()
+    )
     if rebuild_profile_path.exists():
         try:
-            loaded_profile = json.loads(rebuild_profile_path.read_text(encoding="utf-8"))
+            loaded_profile = json.loads(
+                rebuild_profile_path.read_text(encoding="utf-8")
+            )
             if isinstance(loaded_profile, dict):
                 rebuild_profile_payload = loaded_profile
         except Exception:
@@ -4661,18 +4988,23 @@ async def create_rebuild_plan(
     guide_analysis_path = output_dir / "guide_analysis.json"
     rebuild_plan_path = output_dir / "rebuild_plan.json"
     request_manifest_path = output_dir / "request_manifest.json"
-    guide_analysis_path.write_text(json.dumps(guide_analysis, indent=2), encoding="utf-8")
+    guide_analysis_path.write_text(
+        json.dumps(guide_analysis, indent=2), encoding="utf-8"
+    )
     rebuild_plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
     request_manifest_path.write_text(
         json.dumps(
             {
-                "created_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "created_at": datetime.utcnow().replace(microsecond=0).isoformat()
+                + "Z",
                 "job_id": job_id,
                 "pipa_package_name": package_name,
                 "guide_file": safe_name,
                 "top_k": top_k,
                 "lyrics_preview": clean_lyrics[:240],
-                "package_mode": str(bundle.get("package_mode", "pipa-full") or "pipa-full"),
+                "package_mode": str(
+                    bundle.get("package_mode", "pipa-full") or "pipa-full"
+                ),
             },
             indent=2,
         ),
@@ -4719,7 +5051,9 @@ async def create_master_conversion_job(
             detail="No Persona v1.0 voices were found. Train or add a persona package first.",
         )
     if model_name not in available_models:
-        raise HTTPException(status_code=400, detail="Selected persona voice does not exist.")
+        raise HTTPException(
+            status_code=400, detail="Selected persona voice does not exist."
+        )
     primary_model_bundle = backend.resolve_model_reference(model_name)
     selected_pipa_bundle = backend.pipa_store.resolve_bundle(
         str(primary_model_bundle.get("selection_name", ""))
@@ -4730,7 +5064,9 @@ async def create_master_conversion_job(
             detail="Selected voice is missing its Persona v1.0 builder checkpoint.",
         )
     if source_file is None or not source_file.filename:
-        raise HTTPException(status_code=400, detail="Please upload one lead vocal file.")
+        raise HTTPException(
+            status_code=400, detail="Please upload one lead vocal file."
+        )
     clean_lyrics = str(lyrics or "").strip()
     if not clean_lyrics:
         raise HTTPException(status_code=400, detail="Paste the intended lyrics first.")
@@ -4837,10 +5173,14 @@ async def create_generate_job(
             detail="No Persona v1.0 voices were found. Train or add a persona package first.",
         )
     if model_name not in available_models:
-        raise HTTPException(status_code=400, detail="Selected voice model does not exist.")
+        raise HTTPException(
+            status_code=400, detail="Selected voice model does not exist."
+        )
     primary_model_bundle = backend.resolve_model_reference(model_name)
     if guide_file is None:
-        raise HTTPException(status_code=400, detail="Please upload one reference vocal file.")
+        raise HTTPException(
+            status_code=400, detail="Please upload one reference vocal file."
+        )
 
     lyrics = str(lyrics or "").strip()
     if not lyrics:
@@ -4958,7 +5298,9 @@ async def create_job(
     if model_name not in available_models:
         raise HTTPException(status_code=400, detail="Selected model does not exist.")
     if not files:
-        raise HTTPException(status_code=400, detail="Please upload at least one audio file.")
+        raise HTTPException(
+            status_code=400, detail="Please upload at least one audio file."
+        )
     output_mode = str(output_mode or "single").strip().lower()
     if output_mode not in {"single", "blend"}:
         output_mode = "single"
@@ -4966,9 +5308,13 @@ async def create_job(
     blend_percentage = max(0, min(int(blend_percentage), 100))
     if output_mode == "blend":
         if not secondary_model_name:
-            raise HTTPException(status_code=400, detail="Pick a second model for blend mode.")
+            raise HTTPException(
+                status_code=400, detail="Pick a second model for blend mode."
+            )
         if secondary_model_name not in available_models:
-            raise HTTPException(status_code=400, detail="Second blend model does not exist.")
+            raise HTTPException(
+                status_code=400, detail="Second blend model does not exist."
+            )
 
     output_format = output_format.lower()
     if output_format not in {"wav", "mp3", "flac"}:
@@ -5085,15 +5431,23 @@ async def generate_preview(
     blend_percentage = max(0, min(int(blend_percentage), 100))
     if output_mode == "blend":
         if not secondary_model_name:
-            raise HTTPException(status_code=400, detail="Pick a second model for blend mode.")
+            raise HTTPException(
+                status_code=400, detail="Pick a second model for blend mode."
+            )
         if secondary_model_name not in available_models:
-            raise HTTPException(status_code=400, detail="Second blend model does not exist.")
+            raise HTTPException(
+                status_code=400, detail="Second blend model does not exist."
+            )
 
     source_dir = PREVIEW_ROOT / "sources" / sanitize_filename(source_id)
-    source_files = [path for path in source_dir.iterdir()] if source_dir.exists() else []
+    source_files = (
+        [path for path in source_dir.iterdir()] if source_dir.exists() else []
+    )
     source_files = [path for path in source_files if path.is_file()]
     if not source_files:
-        raise HTTPException(status_code=400, detail="Preview source is missing. Re-add the audio file.")
+        raise HTTPException(
+            status_code=400, detail="Preview source is missing. Re-add the audio file."
+        )
 
     settings = build_conversion_settings(
         quality_preset=quality_preset,
@@ -5181,15 +5535,18 @@ async def generate_preview(
             "index_path": str(primary_metadata.get("index_path", "")),
             "timings": {
                 "npy": round(
-                    float(primary_metadata["timings"]["npy"]) + float(secondary_metadata["timings"]["npy"]),
+                    float(primary_metadata["timings"]["npy"])
+                    + float(secondary_metadata["timings"]["npy"]),
                     2,
                 ),
                 "f0": round(
-                    float(primary_metadata["timings"]["f0"]) + float(secondary_metadata["timings"]["f0"]),
+                    float(primary_metadata["timings"]["f0"])
+                    + float(secondary_metadata["timings"]["f0"]),
                     2,
                 ),
                 "infer": round(
-                    float(primary_metadata["timings"]["infer"]) + float(secondary_metadata["timings"]["infer"]),
+                    float(primary_metadata["timings"]["infer"])
+                    + float(secondary_metadata["timings"]["infer"]),
                     2,
                 ),
             },
@@ -5226,7 +5583,9 @@ async def generate_preview(
         "source_duration": float(clip_metadata["total_duration"]),
         "cleanup_mode": str(settings["preprocess_mode"]),
         "preprocess_mode": str(settings["preprocess_mode"]),
-        "preprocess_label": backend.get_preprocess_label(str(settings["preprocess_mode"])),
+        "preprocess_label": backend.get_preprocess_label(
+            str(settings["preprocess_mode"])
+        ),
         "output_mode": output_mode,
         "secondary_model_name": secondary_model_name if output_mode == "blend" else "",
         "blend_percentage": blend_percentage if output_mode == "blend" else 100,
@@ -5293,15 +5652,15 @@ async def create_isolator_job(
 ) -> Dict[str, object]:
     options = backend.get_isolator_options()
     available_modes = {str(item["id"]) for item in options.get("modes", [])}
-    available_input_types = {
-        str(item["id"]) for item in options.get("input_types", [])
-    }
+    available_input_types = {str(item["id"]) for item in options.get("input_types", [])}
     if mode not in available_modes:
         raise HTTPException(status_code=400, detail="Unsupported isolation mode.")
     if input_type not in available_input_types:
         raise HTTPException(status_code=400, detail="Unsupported input type.")
     if not files:
-        raise HTTPException(status_code=400, detail="Please upload at least one audio file.")
+        raise HTTPException(
+            status_code=400, detail="Please upload at least one audio file."
+        )
 
     strength = max(1, min(int(strength), 20))
     clarity_preserve = max(0, min(int(clarity_preserve), 100))
@@ -5357,9 +5716,14 @@ async def create_mastering_job(
     resolution: int = Form(48),
 ) -> Dict[str, object]:
     if source_file is None or not source_file.filename:
-        raise HTTPException(status_code=400, detail="Please upload the file you want to master.")
+        raise HTTPException(
+            status_code=400, detail="Please upload the file you want to master."
+        )
     if not reference_files:
-        raise HTTPException(status_code=400, detail="Please upload at least one mastered reference file.")
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload at least one mastered reference file.",
+        )
 
     resolution = max(8, min(int(resolution), 160))
     job_id = uuid4().hex[:10]
@@ -5378,14 +5742,19 @@ async def create_mastering_job(
     for index, reference_file in enumerate(reference_files, start=1):
         if reference_file is None or not reference_file.filename:
             continue
-        reference_name = sanitize_filename(reference_file.filename or f"reference-{index}.wav")
+        reference_name = sanitize_filename(
+            reference_file.filename or f"reference-{index}.wav"
+        )
         reference_path = upload_dir / f"reference_{index:02d}_{reference_name}"
         with reference_path.open("wb") as handle:
             handle.write(await reference_file.read())
         saved_reference_paths.append(reference_path)
 
     if not saved_reference_paths:
-        raise HTTPException(status_code=400, detail="Please upload at least one usable mastered reference file.")
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload at least one usable mastered reference file.",
+        )
 
     job = MasteringJobState(
         id=job_id,
@@ -5426,7 +5795,9 @@ async def create_optimize_job(
 
     if max_cut_db is None:
         # Backward compatibility for older cached frontends that still send stitch_strength.
-        strength_value = 10 if stitch_strength is None else max(1, min(int(stitch_strength), 20))
+        strength_value = (
+            10 if stitch_strength is None else max(1, min(int(stitch_strength), 20))
+        )
         # strength=1 -> stricter quiet seams, strength=20 -> looser seam dB gate.
         max_cut_db = -38.0 + ((float(strength_value) - 1.0) / 19.0) * 26.0
     max_cut_db = max(-60.0, min(float(max_cut_db), -3.0))
@@ -5447,7 +5818,9 @@ async def create_optimize_job(
     job = OptimizeJobState(
         id=job_id,
         lyrics=cleaned_lyrics,
-        stitch_strength=(10 if stitch_strength is None else max(1, min(int(stitch_strength), 20))),
+        stitch_strength=(
+            10 if stitch_strength is None else max(1, min(int(stitch_strength), 20))
+        ),
         max_cut_db=max_cut_db,
         total_files=len(saved_uploads),
         processed_files=0,
@@ -5477,9 +5850,16 @@ async def create_api_compose_job(
 ) -> Dict[str, object]:
     cleaned_endpoint = endpoint_url.strip()
     if not cleaned_endpoint:
-        raise HTTPException(status_code=400, detail="Please enter a provider endpoint URL.")
-    if not (cleaned_endpoint.startswith("http://") or cleaned_endpoint.startswith("https://")):
-        raise HTTPException(status_code=400, detail="Endpoint URL must start with http:// or https://.")
+        raise HTTPException(
+            status_code=400, detail="Please enter a provider endpoint URL."
+        )
+    if not (
+        cleaned_endpoint.startswith("http://")
+        or cleaned_endpoint.startswith("https://")
+    ):
+        raise HTTPException(
+            status_code=400, detail="Endpoint URL must start with http:// or https://."
+        )
 
     cleaned_lyrics = lyrics.strip()
     if not cleaned_lyrics:
@@ -5488,7 +5868,11 @@ async def create_api_compose_job(
         raise HTTPException(status_code=400, detail="Please upload one MIDI file.")
 
     midi_name = sanitize_filename(midi_file.filename or "input.mid")
-    beat_name = sanitize_filename(beat_file.filename) if beat_file and beat_file.filename else ""
+    beat_name = (
+        sanitize_filename(beat_file.filename)
+        if beat_file and beat_file.filename
+        else ""
+    )
     job_id = uuid4().hex[:10]
     job_root = API_COMPOSE_ROOT / job_id
     upload_dir = job_root / "uploads"
@@ -5544,10 +5928,18 @@ async def create_touchup_job(
 
     source_word = source_word.strip()
     if not source_word:
-        raise HTTPException(status_code=400, detail="Please enter the intended AI lyrics.")
+        raise HTTPException(
+            status_code=400, detail="Please enter the intended AI lyrics."
+        )
 
     mode = str(mode or "detect-regenerate").strip().lower()
-    if mode not in {"detect-only", "detect-regenerate", "repair", "auto-repair", "smart-removal"}:
+    if mode not in {
+        "detect-only",
+        "detect-regenerate",
+        "repair",
+        "auto-repair",
+        "smart-removal",
+    }:
         mode = "detect-regenerate"
     strength = max(1, min(int(strength), 100))
     max_target_words = max(1, min(int(max_target_words), 12))
@@ -5631,13 +6023,17 @@ async def create_training_job(
     if version not in set(options["versions"]):
         raise HTTPException(status_code=400, detail="Unsupported model version.")
     if f0_method not in set(options["f0_methods"]):
-        raise HTTPException(status_code=400, detail="Unsupported pitch extraction method.")
+        raise HTTPException(
+            status_code=400, detail="Unsupported pitch extraction method."
+        )
     if output_mode not in {"persona-v1", "pipa-full", "pipa-lite", "pipa-logic-only"}:
         raise HTTPException(status_code=400, detail="Unsupported training system.")
     if epoch_mode not in {"fixed", "manual-stop"}:
         raise HTTPException(status_code=400, detail="Unsupported training length mode.")
     if alignment_tolerance not in {"forgiving", "balanced", "strict"}:
-        raise HTTPException(status_code=400, detail="Unsupported transcript alignment tolerance.")
+        raise HTTPException(
+            status_code=400, detail="Unsupported transcript alignment tolerance."
+        )
     start_phase = _normalize_training_start_phase(start_phase)
     if start_phase not in {"auto", "warm-up", "curriculum-bridge", "full-diversity"}:
         raise HTTPException(status_code=400, detail="Unsupported training start phase.")
@@ -5645,9 +6041,14 @@ async def create_training_job(
     warmup_stage_epochs = max(0, min(int(warmup_stage_epochs), 10000))
     bridge_stage_epochs = max(0, min(int(bridge_stage_epochs), 10000))
     full_diversity_stage_epochs = max(0, min(int(full_diversity_stage_epochs), 10000))
-    requested_total_epochs = warmup_stage_epochs + bridge_stage_epochs + full_diversity_stage_epochs
+    requested_total_epochs = (
+        warmup_stage_epochs + bridge_stage_epochs + full_diversity_stage_epochs
+    )
     if requested_total_epochs < 1:
-        raise HTTPException(status_code=400, detail="Set at least one curriculum stage to run for one epoch or more.")
+        raise HTTPException(
+            status_code=400,
+            detail="Set at least one curriculum stage to run for one epoch or more.",
+        )
     total_epochs = requested_total_epochs
     guided_regeneration_epochs = requested_total_epochs
     persona_only_mode = output_mode in {"persona-v1", "pipa-logic-only"}
@@ -5727,7 +6128,15 @@ async def create_training_job(
     }
     worker = threading.Thread(
         target=start_training_job,
-        args=(job_id, chosen_name, upload_dir, transcript_dir, plan_dir, job_root, settings),
+        args=(
+            job_id,
+            chosen_name,
+            upload_dir,
+            transcript_dir,
+            plan_dir,
+            job_root,
+            settings,
+        ),
         daemon=True,
     )
     worker.start()
@@ -5736,7 +6145,9 @@ async def create_training_job(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=3001, help="Port for the simple web UI.")
+    parser.add_argument(
+        "--port", type=int, default=3001, help="Port for the simple web UI."
+    )
     parser.add_argument(
         "--noautoopen",
         action="store_true",

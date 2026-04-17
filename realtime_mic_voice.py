@@ -271,7 +271,9 @@ def find_default_index(repo_root: Path, model_path: Path) -> str:
         if not folder.exists():
             continue
         index_files = sorted(
-            file for file in folder.glob("*.index") if "trained" not in file.name.lower()
+            file
+            for file in folder.glob("*.index")
+            if "trained" not in file.name.lower()
         )
         if index_files:
             return index_files[0].as_posix()
@@ -341,17 +343,32 @@ class RealtimeMicVoiceChanger:
         self.sola_search_frame = int(0.01 * self.samplerate)
         self.extra_frame = int(self.extra_time * self.samplerate)
         self.zc = self.samplerate // 100
-        total = self.extra_frame + self.crossfade_frame + self.sola_search_frame + self.block_frame
+        total = (
+            self.extra_frame
+            + self.crossfade_frame
+            + self.sola_search_frame
+            + self.block_frame
+        )
         buf_len = int(np.ceil(total / self.zc) * self.zc)
 
         self.input_wav = np.zeros(buf_len, dtype="float32")
-        self.output_wav_cache = torch.zeros(buf_len, device=self.device, dtype=torch.float32)
+        self.output_wav_cache = torch.zeros(
+            buf_len, device=self.device, dtype=torch.float32
+        )
         self.pitch = np.zeros(self.input_wav.shape[0] // self.zc, dtype="int32")
         self.pitchf = np.zeros(self.input_wav.shape[0] // self.zc, dtype="float64")
-        self.output_wav = torch.zeros(self.block_frame, device=self.device, dtype=torch.float32)
-        self.sola_buffer = torch.zeros(self.crossfade_frame, device=self.device, dtype=torch.float32)
+        self.output_wav = torch.zeros(
+            self.block_frame, device=self.device, dtype=torch.float32
+        )
+        self.sola_buffer = torch.zeros(
+            self.crossfade_frame, device=self.device, dtype=torch.float32
+        )
         self.fade_in_window = torch.linspace(
-            0.0, 1.0, steps=max(1, self.crossfade_frame), device=self.device, dtype=torch.float32
+            0.0,
+            1.0,
+            steps=max(1, self.crossfade_frame),
+            device=self.device,
+            dtype=torch.float32,
         )
         self.fade_out_window = 1 - self.fade_in_window
         self.resampler = tat.Resample(
@@ -392,12 +409,16 @@ class RealtimeMicVoiceChanger:
         resampled = self.resampler(inp)
 
         rate1 = self.block_frame / (
-            self.extra_frame + self.crossfade_frame + self.sola_search_frame + self.block_frame
+            self.extra_frame
+            + self.crossfade_frame
+            + self.sola_search_frame
+            + self.block_frame
         )
-        rate2 = (
-            self.crossfade_frame + self.sola_search_frame + self.block_frame
-        ) / (
-            self.extra_frame + self.crossfade_frame + self.sola_search_frame + self.block_frame
+        rate2 = (self.crossfade_frame + self.sola_search_frame + self.block_frame) / (
+            self.extra_frame
+            + self.crossfade_frame
+            + self.sola_search_frame
+            + self.block_frame
         )
         res2 = self.rvc.infer(
             resampled,
@@ -420,7 +441,10 @@ class RealtimeMicVoiceChanger:
             )
             cor_den = torch.sqrt(
                 F.conv1d(
-                    infer_wav[None, None, : self.crossfade_frame + self.sola_search_frame] ** 2,
+                    infer_wav[
+                        None, None, : self.crossfade_frame + self.sola_search_frame
+                    ]
+                    ** 2,
                     torch.ones(1, 1, self.crossfade_frame, device=self.device),
                 )
                 + 1e-8
@@ -443,7 +467,9 @@ class RealtimeMicVoiceChanger:
                     * self.fade_out_window
                 )
             else:
-                self.sola_buffer[:] = infer_wav[-self.crossfade_frame :] * self.fade_out_window
+                self.sola_buffer[:] = (
+                    infer_wav[-self.crossfade_frame :] * self.fade_out_window
+                )
         else:
             self.output_wav[:] = infer_wav[-self.block_frame :]
 
@@ -575,7 +601,9 @@ def main() -> None:
 
     monitor_output: Optional[MonitorOutput] = None
     if monitor_dev is not None and monitor_dev != output_device_idx:
-        monitor_channels = 1 if int(devices[monitor_dev]["max_output_channels"]) <= 1 else 2
+        monitor_channels = (
+            1 if int(devices[monitor_dev]["max_output_channels"]) <= 1 else 2
+        )
         monitor_output = MonitorOutput(
             samplerate=int(rvc.tgt_sr),
             block_frame=int(max(0.12, float(args.block_time)) * int(rvc.tgt_sr)),

@@ -71,7 +71,9 @@ class MasterConversionEngine:
     def _ffmpeg_binary(self) -> str:
         return self.backend._ffmpeg_binary()
 
-    def _load_audio(self, file_path: Path, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
+    def _load_audio(
+        self, file_path: Path, sample_rate: int = 44100
+    ) -> Tuple[np.ndarray, int]:
         cleaned = str(file_path).strip().strip('"')
         out, _ = (
             ffmpeg.input(cleaned, threads=0)
@@ -87,7 +89,9 @@ class MasterConversionEngine:
             raise RuntimeError(f"Could not decode audio from {file_path.name}.")
         return audio.reshape(-1, 2).copy(), sample_rate
 
-    def _write_audio(self, output_path: Path, audio: np.ndarray, sample_rate: int) -> Path:
+    def _write_audio(
+        self, output_path: Path, audio: np.ndarray, sample_rate: int
+    ) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         peak = float(np.max(np.abs(audio))) if audio.size else 0.0
         normalized = np.asarray(audio, dtype=np.float32)
@@ -118,11 +122,15 @@ class MasterConversionEngine:
         if working.shape[0] == target_length:
             return working.astype(np.float32, copy=False)
         if working.shape[0] == 1:
-            return np.repeat(working.astype(np.float32, copy=False), target_length, axis=0)
+            return np.repeat(
+                working.astype(np.float32, copy=False), target_length, axis=0
+            )
         source_positions = np.linspace(0.0, 1.0, num=working.shape[0], dtype=np.float32)
         target_positions = np.linspace(0.0, 1.0, num=target_length, dtype=np.float32)
         channels = [
-            np.interp(target_positions, source_positions, working[:, channel]).astype(np.float32)
+            np.interp(target_positions, source_positions, working[:, channel]).astype(
+                np.float32
+            )
             for channel in range(working.shape[1])
         ]
         return np.stack(channels, axis=1)
@@ -203,7 +211,10 @@ class MasterConversionEngine:
         post_pad = int((float(post_padding_ms) / 1000.0) * sample_rate)
         for entry in word_scores:
             start = max(0, int(float(entry.get("start", 0.0)) * sample_rate) - pre_pad)
-            end = min(total_samples, int(float(entry.get("end", 0.0)) * sample_rate) + post_pad)
+            end = min(
+                total_samples,
+                int(float(entry.get("end", 0.0)) * sample_rate) + post_pad,
+            )
             if end > start:
                 windows.append((start, end))
         merged = self._merge_windows(
@@ -218,8 +229,12 @@ class MasterConversionEngine:
             edge = min(fade_samples, max(1, segment_length // 3))
             if edge > 1:
                 fade_curve = self._cosine_fade(edge)
-                mask[start : start + edge] = np.maximum(mask[start : start + edge], fade_curve)
-                mask[end - edge : end] = np.maximum(mask[end - edge : end], fade_curve[::-1])
+                mask[start : start + edge] = np.maximum(
+                    mask[start : start + edge], fade_curve
+                )
+                mask[end - edge : end] = np.maximum(
+                    mask[end - edge : end], fade_curve[::-1]
+                )
         return mask, merged
 
     def _lead_focus_score(self, audio: np.ndarray) -> float:
@@ -238,7 +253,9 @@ class MasterConversionEngine:
         return float(np.clip(100.0 * ((1.35 - ratio) / 1.35), 0.0, 100.0))
 
     def _silence_clean_score(self, gap_rms_db: float) -> float:
-        return float(np.clip(((-float(gap_rms_db)) - 18.0) * (100.0 / 42.0), 0.0, 100.0))
+        return float(
+            np.clip(((-float(gap_rms_db)) - 18.0) * (100.0 / 42.0), 0.0, 100.0)
+        )
 
     def _build_phrase_groups(
         self,
@@ -259,7 +276,9 @@ class MasterConversionEngine:
         for entry in ordered[1:]:
             current_index = int(entry["index"])
             start = float(entry.get("start", previous_end))
-            should_split = (start - previous_end) > float(gap_seconds) or len(current) >= int(max_words)
+            should_split = (start - previous_end) > float(gap_seconds) or len(
+                current
+            ) >= int(max_words)
             if should_split:
                 groups.append(current)
                 current = [current_index]
@@ -325,7 +344,9 @@ class MasterConversionEngine:
         ordered = list(profile.get("pipelines", []))
         preferred = str(preferred_pipeline or "").strip().lower()
         if preferred and preferred != "off":
-            ordered = [preferred] + [pipeline for pipeline in ordered if pipeline != preferred]
+            ordered = [preferred] + [
+                pipeline for pipeline in ordered if pipeline != preferred
+            ]
         deduped: List[str] = []
         for pipeline in ordered:
             if pipeline and pipeline not in deduped:
@@ -398,9 +419,8 @@ class MasterConversionEngine:
             mix_curve[:fade_size] = fade
             mix_curve[-fade_size:] = fade[::-1]
         target_audio[start:end] = (
-            ((1.0 - mix_curve[:, np.newaxis]) * target_segment)
-            + (mix_curve[:, np.newaxis] * replacement_segment)
-        )
+            (1.0 - mix_curve[:, np.newaxis]) * target_segment
+        ) + (mix_curve[:, np.newaxis] * replacement_segment)
 
     def _reconstruct_lead(
         self,
@@ -414,7 +434,9 @@ class MasterConversionEngine:
         if not candidates:
             raise RuntimeError("No lead candidates were rendered.")
 
-        anchor = max(candidates, key=lambda entry: float(entry.get("combined_score", 0.0)))
+        anchor = max(
+            candidates, key=lambda entry: float(entry.get("combined_score", 0.0))
+        )
         output_audio = np.asarray(anchor["audio"], dtype=np.float32).copy()
         sample_rate = int(anchor["sample_rate"])
         total_samples = int(output_audio.shape[0])
@@ -448,7 +470,9 @@ class MasterConversionEngine:
             if not expected_words:
                 continue
 
-            anchor_segment = np.asarray(output_audio[target_start:target_end], dtype=np.float32)
+            anchor_segment = np.asarray(
+                output_audio[target_start:target_end], dtype=np.float32
+            )
             anchor_rms_db = self._safe_rms_db(anchor_segment)
             best_pipeline = str(anchor["pipeline_id"])
             best_segment = anchor_segment
@@ -492,9 +516,15 @@ class MasterConversionEngine:
                     scoring_mode = "global-fallback"
                 focus_score = self._lead_focus_score(segment)
                 body_score = float(
-                    np.clip(100.0 - (abs(self._safe_rms_db(segment) - anchor_rms_db) * 8.0), 0.0, 100.0)
+                    np.clip(
+                        100.0 - (abs(self._safe_rms_db(segment) - anchor_rms_db) * 8.0),
+                        0.0,
+                        100.0,
+                    )
                 )
-                local_score = (0.72 * similarity) + (0.18 * focus_score) + (0.10 * body_score)
+                local_score = (
+                    (0.72 * similarity) + (0.18 * focus_score) + (0.10 * body_score)
+                )
                 per_pipeline_scores.append(
                     {
                         "pipeline": str(candidate["pipeline_id"]),
@@ -530,7 +560,13 @@ class MasterConversionEngine:
             if update_status is not None:
                 update_status(
                     {
-                        "progress": min(56, 40 + int(round((group_index / max(len(phrase_groups), 1)) * 16))),
+                        "progress": min(
+                            56,
+                            40
+                            + int(
+                                round((group_index / max(len(phrase_groups), 1)) * 16)
+                            ),
+                        ),
                         "message": (
                             f"Reconstructing lead phrase {group_index}/{len(phrase_groups)} "
                             f"with {best_pipeline}."
@@ -554,14 +590,17 @@ class MasterConversionEngine:
             fade_ms=26.0,
         )
         outside_gain = float(profile.get("outside_gain", 0.025))
-        reconstructed_lead = (
-            (keep_mask[:, np.newaxis] * output_audio)
-            + ((1.0 - keep_mask[:, np.newaxis]) * (output_audio * outside_gain))
+        reconstructed_lead = (keep_mask[:, np.newaxis] * output_audio) + (
+            (1.0 - keep_mask[:, np.newaxis]) * (output_audio * outside_gain)
         )
         removed_layer = output_audio - reconstructed_lead
 
-        lead_path = self._write_audio(output_dir / "reconstructed_lead.wav", reconstructed_lead, sample_rate)
-        removed_path = self._write_audio(output_dir / "reconstructed_removed.wav", removed_layer, sample_rate)
+        lead_path = self._write_audio(
+            output_dir / "reconstructed_lead.wav", reconstructed_lead, sample_rate
+        )
+        removed_path = self._write_audio(
+            output_dir / "reconstructed_removed.wav", removed_layer, sample_rate
+        )
         return {
             "lead_path": lead_path,
             "removed_path": removed_path,
@@ -570,7 +609,9 @@ class MasterConversionEngine:
             "removed_audio": removed_layer,
             "word_scores": list(reconstruction_scoring.get("word_scores", [])),
             "letter_scores": list(reconstruction_scoring.get("letter_scores", [])),
-            "similarity_score": float(reconstruction_scoring.get("similarity_score", 0.0)),
+            "similarity_score": float(
+                reconstruction_scoring.get("similarity_score", 0.0)
+            ),
             "word_report": str(reconstruction_scoring.get("word_report", "")),
             "letter_report": str(reconstruction_scoring.get("letter_report", "")),
             "phrase_choices": phrase_choices,
@@ -590,8 +631,12 @@ class MasterConversionEngine:
         if int(primary_sr) != int(secondary_sr):
             raise RuntimeError("Blended conversions must have matching sample rates.")
         target_length = max(int(primary_audio.shape[0]), int(secondary_audio.shape[0]))
-        primary = self._fit_audio_length(np.asarray(primary_audio, dtype=np.float32), target_length)
-        secondary = self._fit_audio_length(np.asarray(secondary_audio, dtype=np.float32), target_length)
+        primary = self._fit_audio_length(
+            np.asarray(primary_audio, dtype=np.float32), target_length
+        )
+        secondary = self._fit_audio_length(
+            np.asarray(secondary_audio, dtype=np.float32), target_length
+        )
         primary_weight = float(np.clip(float(primary_percentage) / 100.0, 0.0, 1.0))
         blended = (primary * primary_weight) + (secondary * (1.0 - primary_weight))
         self._write_audio(output_path, blended, int(primary_sr))
@@ -620,7 +665,9 @@ class MasterConversionEngine:
                 source_path,
                 primary_path,
                 preprocess_mode="off",
-                preprocess_strength=int(normalized_settings.get("preprocess_strength", 9)),
+                preprocess_strength=int(
+                    normalized_settings.get("preprocess_strength", 9)
+                ),
                 work_dir=work_dir / "prep-primary",
                 speaker_id=int(normalized_settings["speaker_id"]),
                 transpose=int(normalized_settings["transpose"]),
@@ -638,7 +685,9 @@ class MasterConversionEngine:
                 source_path,
                 secondary_path,
                 preprocess_mode="off",
-                preprocess_strength=int(normalized_settings.get("preprocess_strength", 9)),
+                preprocess_strength=int(
+                    normalized_settings.get("preprocess_strength", 9)
+                ),
                 work_dir=work_dir / "prep-secondary",
                 speaker_id=int(normalized_settings["speaker_id"]),
                 transpose=int(normalized_settings["transpose"]),
@@ -651,7 +700,11 @@ class MasterConversionEngine:
                 protect=float(normalized_settings["protect"]),
                 crepe_hop_length=int(normalized_settings["crepe_hop_length"]),
             )
-            temp_output = output_path if output_format == "wav" else output_path.with_suffix(".wav")
+            temp_output = (
+                output_path
+                if output_format == "wav"
+                else output_path.with_suffix(".wav")
+            )
             sample_rate = self._blend_audio_paths(
                 primary_path=primary_path,
                 secondary_path=secondary_path,
@@ -664,9 +717,21 @@ class MasterConversionEngine:
             return {
                 "sample_rate": sample_rate,
                 "timings": {
-                    "npy": round(float(primary_meta["timings"]["npy"]) + float(secondary_meta["timings"]["npy"]), 2),
-                    "f0": round(float(primary_meta["timings"]["f0"]) + float(secondary_meta["timings"]["f0"]), 2),
-                    "infer": round(float(primary_meta["timings"]["infer"]) + float(secondary_meta["timings"]["infer"]), 2),
+                    "npy": round(
+                        float(primary_meta["timings"]["npy"])
+                        + float(secondary_meta["timings"]["npy"]),
+                        2,
+                    ),
+                    "f0": round(
+                        float(primary_meta["timings"]["f0"])
+                        + float(secondary_meta["timings"]["f0"]),
+                        2,
+                    ),
+                    "infer": round(
+                        float(primary_meta["timings"]["infer"])
+                        + float(secondary_meta["timings"]["infer"]),
+                        2,
+                    ),
                 },
             }
 
@@ -690,7 +755,9 @@ class MasterConversionEngine:
         )
         return metadata
 
-    def _resolve_guided_regeneration_bundle(self, settings: Dict[str, object]) -> Dict[str, str]:
+    def _resolve_guided_regeneration_bundle(
+        self, settings: Dict[str, object]
+    ) -> Dict[str, str]:
         manifest_value = str(settings.get("pipa_manifest_path", "") or "").strip()
         if not manifest_value:
             return {}
@@ -703,7 +770,9 @@ class MasterConversionEngine:
             return {}
         if not isinstance(manifest, dict):
             return {}
-        checkpoint_value = str(manifest.get("guided_regeneration_path", "") or "").strip()
+        checkpoint_value = str(
+            manifest.get("guided_regeneration_path", "") or ""
+        ).strip()
         if not checkpoint_value:
             return {}
         checkpoint_path = Path(checkpoint_value)
@@ -711,19 +780,29 @@ class MasterConversionEngine:
             checkpoint_path = manifest_path.parent / checkpoint_path
         if not checkpoint_path.exists():
             return {}
-        config_value = str(manifest.get("guided_regeneration_config_path", "") or "").strip()
+        config_value = str(
+            manifest.get("guided_regeneration_config_path", "") or ""
+        ).strip()
         config_path = Path(config_value) if config_value else Path()
         if config_value and not config_path.is_absolute():
             config_path = manifest_path.parent / config_path
-        report_value = str(manifest.get("guided_regeneration_report_path", "") or "").strip()
+        report_value = str(
+            manifest.get("guided_regeneration_report_path", "") or ""
+        ).strip()
         report_path = Path(report_value) if report_value else Path()
         if report_value and not report_path.is_absolute():
             report_path = manifest_path.parent / report_path
-        training_report_value = str(manifest.get("training_report_path", "") or "").strip()
-        training_report_path = Path(training_report_value) if training_report_value else Path()
+        training_report_value = str(
+            manifest.get("training_report_path", "") or ""
+        ).strip()
+        training_report_path = (
+            Path(training_report_value) if training_report_value else Path()
+        )
         if training_report_value and not training_report_path.is_absolute():
             training_report_path = manifest_path.parent / training_report_path
-        stats_value = str(manifest.get("guided_regeneration_stats_path", "") or "").strip()
+        stats_value = str(
+            manifest.get("guided_regeneration_stats_path", "") or ""
+        ).strip()
         stats_path = Path(stats_value) if stats_value else Path()
         if stats_value and not stats_path.is_absolute():
             stats_path = manifest_path.parent / stats_path
@@ -731,12 +810,16 @@ class MasterConversionEngine:
             "manifest_path": str(manifest_path),
             "checkpoint_path": str(checkpoint_path),
             "config_path": str(config_path) if config_value else "",
-            "training_report_path": str(training_report_path) if training_report_value else "",
+            "training_report_path": (
+                str(training_report_path) if training_report_value else ""
+            ),
             "report_path": str(report_path) if report_value else "",
             "stats_path": str(stats_path) if stats_value else "",
         }
 
-    def _build_patch_variant_settings(self, settings: Dict[str, object]) -> List[Dict[str, object]]:
+    def _build_patch_variant_settings(
+        self, settings: Dict[str, object]
+    ) -> List[Dict[str, object]]:
         base = dict(settings)
         base["preprocess_mode"] = "off"
         protect_value = float(base.get("protect", 0.33))
@@ -807,8 +890,12 @@ class MasterConversionEngine:
                 secondary_model_name=secondary_model_name,
                 blend_percentage=blend_percentage,
             )
-            patch_audio, sample_rate = self._load_audio(variant_output, sample_rate=44100)
-            scoring = self.repair_engine.scorer.analyze_audio(patch_audio, sample_rate, phrase_text)
+            patch_audio, sample_rate = self._load_audio(
+                variant_output, sample_rate=44100
+            )
+            scoring = self.repair_engine.scorer.analyze_audio(
+                patch_audio, sample_rate, phrase_text
+            )
             local_score = (0.84 * float(scoring.get("similarity_score", 0.0))) + (
                 0.16 * self._lead_focus_score(patch_audio)
             )
@@ -835,30 +922,49 @@ class MasterConversionEngine:
         guided_bundle: Dict[str, str],
         phrase_word_scores: Optional[List[Dict[str, object]]] = None,
     ) -> Path:
-        checkpoint_path = Path(str(guided_bundle.get("checkpoint_path", "") or "").strip())
+        checkpoint_path = Path(
+            str(guided_bundle.get("checkpoint_path", "") or "").strip()
+        )
         if checkpoint_path.exists():
             config_value = str(guided_bundle.get("config_path", "") or "").strip()
-            training_report_value = str(guided_bundle.get("training_report_path", "") or "").strip()
+            training_report_value = str(
+                guided_bundle.get("training_report_path", "") or ""
+            ).strip()
             manifest_value = str(guided_bundle.get("manifest_path", "") or "").strip()
             config_path = Path(config_value) if config_value else None
-            training_report_path = Path(training_report_value) if training_report_value else None
+            training_report_path = (
+                Path(training_report_value) if training_report_value else None
+            )
             manifest_path = Path(manifest_value) if manifest_value else None
             try:
-                synthesized = self.backend.pipa_store.guided_svs.synthesize_phrase_from_blueprint(
-                    checkpoint_path=checkpoint_path,
-                    config_path=(config_path if config_path is not None and config_path.exists() else None),
-                    manifest_path=(manifest_path if manifest_path is not None and manifest_path.exists() else None),
-                    training_report_path=(
-                        training_report_path
-                        if training_report_path is not None and training_report_path.exists()
-                        else None
-                    ),
-                    guide_audio_path=reference_segment_path,
-                    phrase_text=phrase_text,
-                    output_path=output_path,
-                    phrase_word_scores=list(phrase_word_scores or []),
+                synthesized = (
+                    self.backend.pipa_store.guided_svs.synthesize_phrase_from_blueprint(
+                        checkpoint_path=checkpoint_path,
+                        config_path=(
+                            config_path
+                            if config_path is not None and config_path.exists()
+                            else None
+                        ),
+                        manifest_path=(
+                            manifest_path
+                            if manifest_path is not None and manifest_path.exists()
+                            else None
+                        ),
+                        training_report_path=(
+                            training_report_path
+                            if training_report_path is not None
+                            and training_report_path.exists()
+                            else None
+                        ),
+                        guide_audio_path=reference_segment_path,
+                        phrase_text=phrase_text,
+                        output_path=output_path,
+                        phrase_word_scores=list(phrase_word_scores or []),
+                    )
                 )
-                rendered_path = Path(str(synthesized.get("output_path", "") or "").strip())
+                rendered_path = Path(
+                    str(synthesized.get("output_path", "") or "").strip()
+                )
                 if rendered_path.exists():
                     return rendered_path
             except Exception:
@@ -893,13 +999,16 @@ class MasterConversionEngine:
             bridge_gap_ms=210.0,
             fade_ms=24.0,
         )
-        cleaned = (
-            (keep_mask[:, np.newaxis] * audio)
-            + ((1.0 - keep_mask[:, np.newaxis]) * (audio * float(outside_gain)))
+        cleaned = (keep_mask[:, np.newaxis] * audio) + (
+            (1.0 - keep_mask[:, np.newaxis]) * (audio * float(outside_gain))
         )
         removed = audio - cleaned
-        final_path = self._write_audio(output_dir / "master_conversion_final.wav", cleaned, sample_rate)
-        removed_path = self._write_audio(output_dir / "master_conversion_removed_noise.wav", removed, sample_rate)
+        final_path = self._write_audio(
+            output_dir / "master_conversion_final.wav", cleaned, sample_rate
+        )
+        removed_path = self._write_audio(
+            output_dir / "master_conversion_removed_noise.wav", removed, sample_rate
+        )
         return {
             "output_path": final_path,
             "removed_path": removed_path,
@@ -992,7 +1101,9 @@ class MasterConversionEngine:
             raise RuntimeError("Master Conversion was cancelled.")
 
         guided_bundle = self._resolve_guided_regeneration_bundle(settings)
-        use_full_blueprint_conversion = bool(str(guided_bundle.get("checkpoint_path", "") or "").strip())
+        use_full_blueprint_conversion = bool(
+            str(guided_bundle.get("checkpoint_path", "") or "").strip()
+        )
 
         if update_status is not None:
             update_status(
@@ -1015,26 +1126,40 @@ class MasterConversionEngine:
                 int(source_reference["sample_rate"]),
                 lyrics,
             )
-            checkpoint_path = Path(str(guided_bundle.get("checkpoint_path", "") or "").strip())
+            checkpoint_path = Path(
+                str(guided_bundle.get("checkpoint_path", "") or "").strip()
+            )
             config_value = str(guided_bundle.get("config_path", "") or "").strip()
             manifest_value = str(guided_bundle.get("manifest_path", "") or "").strip()
-            training_report_value = str(guided_bundle.get("training_report_path", "") or "").strip()
-            synthesis_metadata = self.backend.pipa_store.guided_svs.synthesize_full_song_from_blueprint(
-                checkpoint_path=checkpoint_path,
-                config_path=(Path(config_value) if config_value else None),
-                manifest_path=(Path(manifest_value) if manifest_value else None),
-                training_report_path=(Path(training_report_value) if training_report_value else None),
-                guide_audio_path=Path(str(source_reference["prepared_path"])),
-                lyrics=lyrics,
-                output_path=raw_converted_path,
-                phrase_word_scores=list(guide_scoring.get("word_scores", [])),
+            training_report_value = str(
+                guided_bundle.get("training_report_path", "") or ""
+            ).strip()
+            synthesis_metadata = (
+                self.backend.pipa_store.guided_svs.synthesize_full_song_from_blueprint(
+                    checkpoint_path=checkpoint_path,
+                    config_path=(Path(config_value) if config_value else None),
+                    manifest_path=(Path(manifest_value) if manifest_value else None),
+                    training_report_path=(
+                        Path(training_report_value) if training_report_value else None
+                    ),
+                    guide_audio_path=Path(str(source_reference["prepared_path"])),
+                    lyrics=lyrics,
+                    output_path=raw_converted_path,
+                    phrase_word_scores=list(guide_scoring.get("word_scores", [])),
+                )
             )
             raw_metadata = {
-                "sample_rate": int(synthesis_metadata.get("sample_rate", source_reference["sample_rate"])),
+                "sample_rate": int(
+                    synthesis_metadata.get(
+                        "sample_rate", source_reference["sample_rate"]
+                    )
+                ),
                 "timings": {
                     "npy": 0.0,
                     "f0": 0.0,
-                    "infer": round(float(synthesis_metadata.get("synthesis_seconds", 0.0)), 2),
+                    "infer": round(
+                        float(synthesis_metadata.get("synthesis_seconds", 0.0)), 2
+                    ),
                 },
             }
         else:
@@ -1049,7 +1174,9 @@ class MasterConversionEngine:
                 blend_percentage=int(blend_percentage),
             )
 
-        repair_limits = self.REPAIR_PRESETS.get(quality_preset, self.REPAIR_PRESETS["balanced"])
+        repair_limits = self.REPAIR_PRESETS.get(
+            quality_preset, self.REPAIR_PRESETS["balanced"]
+        )
         if use_full_blueprint_conversion:
             if update_status is not None:
                 update_status(
@@ -1058,7 +1185,9 @@ class MasterConversionEngine:
                         "message": "Scoring the full synthesized lead against the intended lyrics.",
                     }
                 )
-            synthesized_audio, synthesized_sample_rate = self._load_audio(raw_converted_path, sample_rate=44100)
+            synthesized_audio, synthesized_sample_rate = self._load_audio(
+                raw_converted_path, sample_rate=44100
+            )
             synthesis_scoring = self.repair_engine.scorer.analyze_audio(
                 synthesized_audio,
                 synthesized_sample_rate,
@@ -1069,7 +1198,9 @@ class MasterConversionEngine:
                 "sample_rate": int(synthesized_sample_rate),
                 "source_rms_db": self._safe_rms_db(synthesized_audio),
                 "output_rms_db": self._safe_rms_db(synthesized_audio),
-                "best_similarity_score": float(synthesis_scoring.get("similarity_score", 0.0)),
+                "best_similarity_score": float(
+                    synthesis_scoring.get("similarity_score", 0.0)
+                ),
                 "best_word_report": str(synthesis_scoring.get("word_report", "")),
                 "best_letter_report": str(synthesis_scoring.get("letter_report", "")),
                 "best_word_scores": list(synthesis_scoring.get("word_scores", [])),
@@ -1089,7 +1220,9 @@ class MasterConversionEngine:
                     }
                 )
 
-            reference_bank_path = str(settings.get("pipa_reference_bank_path", "") or "").strip()
+            reference_bank_path = str(
+                settings.get("pipa_reference_bank_path", "") or ""
+            ).strip()
 
             def resolve_reference_candidates(
                 phrase_text: str,
@@ -1108,7 +1241,9 @@ class MasterConversionEngine:
                     limit=max(1, int(limit)),
                 ):
                     candidate = dict(entry)
-                    candidate["file_path"] = str(base_dir / str(entry.get("relative_path", "")))
+                    candidate["file_path"] = str(
+                        base_dir / str(entry.get("relative_path", ""))
+                    )
                     candidates.append(candidate)
                 return candidates
 
@@ -1151,7 +1286,10 @@ class MasterConversionEngine:
                         reference_segment_path=reference_segment_path,
                         output_path=rendered_patch_path,
                         work_dir=(
-                            output_dir / "repair" / "patch-work" / f"group_{int(metadata.get('group_index', 0)):02d}"
+                            output_dir
+                            / "repair"
+                            / "patch-work"
+                            / f"group_{int(metadata.get('group_index', 0)):02d}"
                         ),
                         guided_bundle=guided_bundle,
                         phrase_word_scores=list(
@@ -1168,14 +1306,35 @@ class MasterConversionEngine:
                         {
                             "progress": min(
                                 92,
-                                64 + int(round(max(0.0, min(float(payload.get("progress", 0.0)), 100.0)) * 0.24)),
+                                64
+                                + int(
+                                    round(
+                                        max(
+                                            0.0,
+                                            min(
+                                                float(payload.get("progress", 0.0)),
+                                                100.0,
+                                            ),
+                                        )
+                                        * 0.24
+                                    )
+                                ),
                             ),
-                            "message": str(payload.get("message", "")) or "Repairing weak phrase regions.",
-                            "best_similarity_score": float(payload.get("best_similarity_score", 0.0)),
-                            "best_word_report": str(payload.get("best_word_report", "")),
-                            "best_letter_report": str(payload.get("best_letter_report", "")),
+                            "message": str(payload.get("message", ""))
+                            or "Repairing weak phrase regions.",
+                            "best_similarity_score": float(
+                                payload.get("best_similarity_score", 0.0)
+                            ),
+                            "best_word_report": str(
+                                payload.get("best_word_report", "")
+                            ),
+                            "best_letter_report": str(
+                                payload.get("best_letter_report", "")
+                            ),
                             "repair_attempts": int(payload.get("repair_attempts", 0)),
-                            "repaired_word_count": int(payload.get("repaired_word_count", 0)),
+                            "repaired_word_count": int(
+                                payload.get("repaired_word_count", 0)
+                            ),
                         }
                     )
                 ),
@@ -1200,7 +1359,9 @@ class MasterConversionEngine:
         )
 
         final_wav_path = Path(str(final_cleanup["output_path"]))
-        final_output_path = output_dir / f"{input_path.stem}_master_conversion.{output_format}"
+        final_output_path = (
+            output_dir / f"{input_path.stem}_master_conversion.{output_format}"
+        )
         if output_format == "wav":
             shutil.copy2(str(final_wav_path), str(final_output_path))
         else:
@@ -1212,16 +1373,24 @@ class MasterConversionEngine:
             "model_name": model_name,
             "secondary_model_name": secondary_model_name,
             "blend_percentage": int(blend_percentage),
-            "cleanup_mode": str(source_reference.get("cleanup_mode", normalized_preprocess_mode)),
+            "cleanup_mode": str(
+                source_reference.get("cleanup_mode", normalized_preprocess_mode)
+            ),
             "cleanup_strength": int(candidate_strength),
             "quality_preset": quality_preset,
             "output_format": output_format,
             "pipa_manifest_path": str(settings.get("pipa_manifest_path", "")),
-            "pipa_reference_bank_path": str(settings.get("pipa_reference_bank_path", "")),
+            "pipa_reference_bank_path": str(
+                settings.get("pipa_reference_bank_path", "")
+            ),
             "prepared_source_path": str(source_reference["prepared_path"]),
             "prepared_removed_path": str(source_reference["removed_path"]),
-            "repair_similarity": round(float(repair_metadata.get("best_similarity_score", 0.0)), 2),
-            "final_similarity": round(float(final_cleanup.get("best_similarity_score", 0.0)), 2),
+            "repair_similarity": round(
+                float(repair_metadata.get("best_similarity_score", 0.0)), 2
+            ),
+            "final_similarity": round(
+                float(final_cleanup.get("best_similarity_score", 0.0)), 2
+            ),
             "repair_attempts": int(repair_metadata.get("repair_attempts", 0)),
             "repaired_word_count": int(repair_metadata.get("repaired_word_count", 0)),
             "repair_patch_mode": (
@@ -1229,14 +1398,18 @@ class MasterConversionEngine:
                 if use_full_blueprint_conversion
                 else "blueprint-gap-fill-v1"
             ),
-            "guided_regeneration_checkpoint": str(guided_bundle.get("checkpoint_path", "") or ""),
+            "guided_regeneration_checkpoint": str(
+                guided_bundle.get("checkpoint_path", "") or ""
+            ),
             "timings": {
                 "npy": round(float(raw_metadata["timings"]["npy"]), 2),
                 "f0": round(float(raw_metadata["timings"]["f0"]), 2),
                 "infer": round(float(raw_metadata["timings"]["infer"]), 2),
             },
         }
-        metadata_path.write_text(json.dumps(metadata_payload, indent=2), encoding="utf-8")
+        metadata_path.write_text(
+            json.dumps(metadata_payload, indent=2), encoding="utf-8"
+        )
 
         return {
             "output_path": final_output_path,

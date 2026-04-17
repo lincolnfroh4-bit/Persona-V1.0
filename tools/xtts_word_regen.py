@@ -62,9 +62,13 @@ def _coqui_tos_agreed() -> bool:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Regenerate a short word or phrase with XTTS v2.")
+    parser = argparse.ArgumentParser(
+        description="Regenerate a short word or phrase with XTTS v2."
+    )
     parser.add_argument("--text", required=True, help="Word or phrase to generate.")
-    parser.add_argument("--speaker-wav", required=True, help="Reference speaker audio file.")
+    parser.add_argument(
+        "--speaker-wav", required=True, help="Reference speaker audio file."
+    )
     parser.add_argument("--output", required=True, help="Output wav path.")
     parser.add_argument("--language", default="en", help="XTTS language code.")
     parser.add_argument(

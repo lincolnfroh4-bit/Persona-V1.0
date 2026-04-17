@@ -10,6 +10,7 @@
     增加无索引支持
     f0算法改harvest(怎么看就只有这个会影响CPU占用)，但是不这么改效果不好
 """
+
 import os, sys, traceback, re
 
 import json
@@ -30,7 +31,6 @@ import librosa, torch, pyworld, faiss, time, threading
 import torch.nn.functional as F
 import torchaudio.transforms as tat
 import scipy.signal as signal
-
 
 # import matplotlib.pyplot as plt
 from lib.infer_pack.models import (
@@ -486,7 +486,7 @@ class GUI:
         if len(values["index_path"].strip()) == 0:
             sg.popup(i18n("请选择index文件"))
             return False
-        pattern = re.compile("[^\x00-\x7F]+")
+        pattern = re.compile("[^\x00-\x7f]+")
         if pattern.findall(values["hubert_path"]):
             sg.popup(i18n("hubert模型路径不可包含中文"))
             return False

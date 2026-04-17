@@ -75,7 +75,9 @@ class RealtimeVoiceGui:
             row=3, column=0, columnspan=3, sticky="we", pady=(4, 12)
         )
 
-        ttk.Label(frame, text="Call output (virtual cable)").grid(row=4, column=0, sticky="w")
+        ttk.Label(frame, text="Call output (virtual cable)").grid(
+            row=4, column=0, sticky="w"
+        )
         self.output_device_combo = ttk.Combobox(
             frame,
             textvariable=self.output_device_var,
@@ -86,7 +88,9 @@ class RealtimeVoiceGui:
             row=5, column=0, columnspan=3, sticky="we", pady=(4, 12)
         )
 
-        ttk.Label(frame, text="Hear output (optional monitor)").grid(row=6, column=0, sticky="w")
+        ttk.Label(frame, text="Hear output (optional monitor)").grid(
+            row=6, column=0, sticky="w"
+        )
         self.monitor_device_combo = ttk.Combobox(
             frame,
             textvariable=self.monitor_device_var,
@@ -179,7 +183,9 @@ class RealtimeVoiceGui:
         labels = []
         hostapis = sd.query_hostapis()
         devices = sd.query_devices()
-        hostapi_names = {idx: info.get("name", "Unknown API") for idx, info in enumerate(hostapis)}
+        hostapi_names = {
+            idx: info.get("name", "Unknown API") for idx, info in enumerate(hostapis)
+        }
         for idx, device in enumerate(devices):
             if int(device.get("max_input_channels", 0)) <= 0:
                 continue
@@ -287,7 +293,9 @@ class RealtimeVoiceGui:
             messagebox.showerror("No voice", "Pick a voice model first.")
             return
         if selected_model_path is None:
-            messagebox.showerror("Missing voice", "Selected .pth file was not found in weights/.")
+            messagebox.showerror(
+                "Missing voice", "Selected .pth file was not found in weights/."
+            )
             return
         if not self.python_exe.exists():
             messagebox.showerror("Missing Python", f"Not found: {self.python_exe}")
@@ -349,9 +357,7 @@ class RealtimeVoiceGui:
             command.extend(["--monitor-device", str(monitor_device_id)])
         try:
             self._append_log(
-                "Starting realtime mic process:\n"
-                + " ".join(command)
-                + "\n"
+                "Starting realtime mic process:\n" + " ".join(command) + "\n"
             )
             self.process = subprocess.Popen(
                 command,

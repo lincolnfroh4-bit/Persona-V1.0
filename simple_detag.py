@@ -17,7 +17,9 @@ class SimpleDetagger:
         self.repo_root = repo_root
         self.logs_root = self.repo_root / "logs"
         self.weights_root = self.repo_root / "weights"
-        self.model_cache_root = self.repo_root / "pretrained_models" / "speechbrain-ecapa"
+        self.model_cache_root = (
+            self.repo_root / "pretrained_models" / "speechbrain-ecapa"
+        )
         self.separator_cache_root = (
             self.repo_root / "pretrained_models" / "speechbrain-sepformer-wsj02mix"
         )
@@ -45,7 +47,9 @@ class SimpleDetagger:
 
         for weight_path in sorted(self.weights_root.glob("*.pth")):
             voice_id = weight_path.name
-            matched_reference = self._match_reference_folder(weight_path.stem, reference_lookup)
+            matched_reference = self._match_reference_folder(
+                weight_path.stem, reference_lookup
+            )
             reference_clips = 0
             reference_id = ""
             if matched_reference is not None:
@@ -64,7 +68,9 @@ class SimpleDetagger:
             )
             seen_ids.add(voice_id)
 
-        for log_dir in sorted(reference_lookup.values(), key=lambda path: path.name.lower()):
+        for log_dir in sorted(
+            reference_lookup.values(), key=lambda path: path.name.lower()
+        ):
             voice_id = log_dir.name
             if voice_id in seen_ids or log_dir.name in seen_reference_ids:
                 continue
@@ -93,7 +99,9 @@ class SimpleDetagger:
             if update_progress is not None:
                 update_progress("Loading the selected voice profile...", 8)
             reference_profile = self._get_reference_profile(voice_id)
-            reference_embedding = np.asarray(reference_profile["embedding"], dtype=np.float32)
+            reference_embedding = np.asarray(
+                reference_profile["embedding"], dtype=np.float32
+            )
 
             if update_progress is not None:
                 update_progress("Scanning the audio for matching speech...", 18)
@@ -115,7 +123,9 @@ class SimpleDetagger:
             match_ceiling = float(reference_profile["match_ceiling"])
             threshold_min = max(0.12, match_floor - 0.05)
             threshold_max = max(threshold_min + 0.04, match_center + 0.02)
-            threshold = threshold_min + ((threshold_max - threshold_min) * strength_ratio)
+            threshold = threshold_min + (
+                (threshold_max - threshold_min) * strength_ratio
+            )
             threshold = min(threshold, match_ceiling)
             binary_mask = (similarities >= threshold).astype(np.float32)
 
@@ -151,15 +161,19 @@ class SimpleDetagger:
                 update_progress("Writing the isolated voice output...", 88)
             original_audio, original_sr = self._load_audio_native(input_path)
             original_length = original_audio.shape[0]
-            mask_positions = np.linspace(0, original_length - 1, num=combined_audio.shape[0])
-            target_positions = np.arange(original_length)
-            output_mono = np.interp(target_positions, mask_positions, combined_audio).astype(
-                np.float32
+            mask_positions = np.linspace(
+                0, original_length - 1, num=combined_audio.shape[0]
             )
+            target_positions = np.arange(original_length)
+            output_mono = np.interp(
+                target_positions, mask_positions, combined_audio
+            ).astype(np.float32)
             peak = float(np.max(np.abs(output_mono)) + 1e-9)
             if peak > 1.0:
                 output_mono = output_mono / peak
-            output_audio = np.repeat(output_mono[:, None], original_audio.shape[1], axis=1)
+            output_audio = np.repeat(
+                output_mono[:, None], original_audio.shape[1], axis=1
+            )
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
             sf.write(str(output_path), output_audio, original_sr)
@@ -219,7 +233,9 @@ class SimpleDetagger:
 
             taken = 0
             for start in range(0, audio.shape[0] - window_samples + 1, hop_samples):
-                embeddings.append(self._embed_audio(audio[start : start + window_samples]))
+                embeddings.append(
+                    self._embed_audio(audio[start : start + window_samples])
+                )
                 taken += 1
                 if taken >= 3:
                     break
@@ -256,7 +272,9 @@ class SimpleDetagger:
         lookup: Dict[str, Path] = {}
         if not self.logs_root.exists():
             return lookup
-        for log_dir in sorted(path for path in self.logs_root.iterdir() if path.is_dir()):
+        for log_dir in sorted(
+            path for path in self.logs_root.iterdir() if path.is_dir()
+        ):
             if log_dir.name.lower() == "mute":
                 continue
             if self._count_reference_clips(log_dir) < 1:
@@ -320,7 +338,9 @@ class SimpleDetagger:
         positions = []
         scores = []
         last_progress = -1
-        total_steps = max(1, 1 + (analysis_audio.shape[0] - window_samples) // hop_samples)
+        total_steps = max(
+            1, 1 + (analysis_audio.shape[0] - window_samples) // hop_samples
+        )
         for step_index, start in enumerate(
             range(0, analysis_audio.shape[0] - window_samples + 1, hop_samples)
         ):
@@ -331,7 +351,9 @@ class SimpleDetagger:
             if update_progress is not None:
                 progress = 18 + int(58 * ((step_index + 1) / total_steps))
                 if progress != last_progress:
-                    update_progress("Scanning the audio for matching speech...", progress)
+                    update_progress(
+                        "Scanning the audio for matching speech...", progress
+                    )
                     last_progress = progress
 
         positions = np.asarray(positions, dtype=np.float32)
@@ -351,7 +373,9 @@ class SimpleDetagger:
             interpolated = np.convolve(interpolated, kernel, mode="same")
         return interpolated.astype(np.float32)
 
-    def _score_segment(self, audio: np.ndarray, reference_embedding: np.ndarray) -> float:
+    def _score_segment(
+        self, audio: np.ndarray, reference_embedding: np.ndarray
+    ) -> float:
         if audio.size == 0:
             return 0.0
         energy = float(np.sqrt(np.mean(np.square(audio))) + 1e-9)
@@ -398,7 +422,9 @@ class SimpleDetagger:
         target_floor = max(0.18, float(reference_profile["match_floor"]) - 0.10)
         accum = np.zeros(audio_8k.shape[0], dtype=np.float32)
         weights = np.zeros(audio_8k.shape[0], dtype=np.float32)
-        starts = list(range(0, max(1, audio_8k.shape[0] - window_samples + 1), hop_samples))
+        starts = list(
+            range(0, max(1, audio_8k.shape[0] - window_samples + 1), hop_samples)
+        )
         if starts[-1] != max(0, audio_8k.shape[0] - window_samples):
             starts.append(max(0, audio_8k.shape[0] - window_samples))
         blend_window = np.hanning(window_samples).astype(np.float32)
@@ -440,7 +466,9 @@ class SimpleDetagger:
 
         separated_audio = accum / np.maximum(weights, 1e-6)
         separated_tensor = torch.from_numpy(separated_audio).float().unsqueeze(0)
-        separated_16k = torchaudio.functional.resample(separated_tensor, separator_sr, 16000)
+        separated_16k = torchaudio.functional.resample(
+            separated_tensor, separator_sr, 16000
+        )
         overlap_audio = separated_16k.squeeze(0).cpu().numpy().astype(np.float32)
         if overlap_audio.shape[0] != analysis_audio.shape[0]:
             overlap_audio = np.interp(

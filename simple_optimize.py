@@ -36,7 +36,9 @@ class VoiceSuitabilityOptimizer:
         return np.asarray(audio, dtype=np.float32)
 
     def _time_to_sample(self, seconds: float, length: int) -> int:
-        return int(np.clip(round(float(seconds) * self.sample_rate), 0, max(length - 1, 0)))
+        return int(
+            np.clip(round(float(seconds) * self.sample_rate), 0, max(length - 1, 0))
+        )
 
     def _segment_with_margin(
         self,
@@ -57,7 +59,9 @@ class VoiceSuitabilityOptimizer:
             end = min(length, start + 32)
         return np.asarray(audio[start:end], dtype=np.float32), start, end
 
-    def _fit_to_length_no_stretch(self, segment: np.ndarray, target_length: int) -> np.ndarray:
+    def _fit_to_length_no_stretch(
+        self, segment: np.ndarray, target_length: int
+    ) -> np.ndarray:
         """
         Match length without time-stretching (no tempo/pitch warp).
         """
@@ -116,7 +120,9 @@ class VoiceSuitabilityOptimizer:
             max(0, target_end),
             min(merged_len, target_end + seam_window),
         )
-        prev_replacement_db = self._window_dbfs(replacement, 0, min(repl_len, seam_window))
+        prev_replacement_db = self._window_dbfs(
+            replacement, 0, min(repl_len, seam_window)
+        )
         next_replacement_db = self._window_dbfs(
             replacement,
             max(0, repl_len - seam_window),
@@ -178,13 +184,17 @@ class VoiceSuitabilityOptimizer:
         return {
             "path": str(vocal_path),
             "audio": audio,
-            "duration_seconds": round(float(audio.shape[0]) / float(self.sample_rate), 2),
+            "duration_seconds": round(
+                float(audio.shape[0]) / float(self.sample_rate), 2
+            ),
             "score": float(scoring.get("similarity_score", 0.0)),
             "summary": str(scoring.get("word_report", "")),
             "issues": [
-                "No usable lyric scoring was produced."
-                if not word_scores
-                else f"Weakest words: {weak_summary}"
+                (
+                    "No usable lyric scoring was produced."
+                    if not word_scores
+                    else f"Weakest words: {weak_summary}"
+                )
             ],
             "word_scores": word_scores,
             "word_by_index": word_by_index,
@@ -220,7 +230,9 @@ class VoiceSuitabilityOptimizer:
             )
         )
         anchor = analyses[anchor_index]
-        anchor_audio = np.asarray(anchor.get("audio", np.zeros(1, dtype=np.float32)), dtype=np.float32)
+        anchor_audio = np.asarray(
+            anchor.get("audio", np.zeros(1, dtype=np.float32)), dtype=np.float32
+        )
         merged = np.copy(anchor_audio)
         anchor_words = anchor.get("word_by_index", {})
         if not isinstance(anchor_words, dict):
@@ -258,7 +270,9 @@ class VoiceSuitabilityOptimizer:
                     continue
                 if (candidate_similarity - anchor_similarity) < min_gain:
                     continue
-                candidate_pool.append((candidate_similarity, candidate_index, candidate_entry))
+                candidate_pool.append(
+                    (candidate_similarity, candidate_index, candidate_entry)
+                )
 
             candidate_pool.sort(key=lambda item: item[0], reverse=True)
             if not candidate_pool:
@@ -280,9 +294,15 @@ class VoiceSuitabilityOptimizer:
             chosen_replacement: Optional[np.ndarray] = None
             chosen_gate_metrics: Dict[str, float] = {}
 
-            for candidate_similarity, candidate_index, _candidate_entry in candidate_pool:
+            for (
+                candidate_similarity,
+                candidate_index,
+                _candidate_entry,
+            ) in candidate_pool:
                 candidate_audio = np.asarray(
-                    analyses[candidate_index].get("audio", np.zeros(1, dtype=np.float32)),
+                    analyses[candidate_index].get(
+                        "audio", np.zeros(1, dtype=np.float32)
+                    ),
                     dtype=np.float32,
                 )
                 replacement_raw, _, _ = self._segment_with_margin(
@@ -291,10 +311,16 @@ class VoiceSuitabilityOptimizer:
                     anchor_end_sec,
                     margin_samples=margin_samples,
                 )
-                replacement = self._fit_to_length_no_stretch(replacement_raw, target_length)
+                replacement = self._fit_to_length_no_stretch(
+                    replacement_raw, target_length
+                )
 
-                original_rms = float(np.sqrt(np.mean(np.square(original), dtype=np.float64) + 1e-9))
-                replacement_rms = float(np.sqrt(np.mean(np.square(replacement), dtype=np.float64) + 1e-9))
+                original_rms = float(
+                    np.sqrt(np.mean(np.square(original), dtype=np.float64) + 1e-9)
+                )
+                replacement_rms = float(
+                    np.sqrt(np.mean(np.square(replacement), dtype=np.float64) + 1e-9)
+                )
                 if replacement_rms > 1e-7 and original_rms > 1e-7:
                     gain = float(np.clip(original_rms / replacement_rms, 0.8, 1.25))
                     replacement = replacement * gain
@@ -356,12 +382,18 @@ class VoiceSuitabilityOptimizer:
                     "index": int(word_index),
                     "word": word,
                     "from_source": Path(str(anchor.get("path", ""))).name,
-                    "to_source": Path(str(analyses[chosen_take_index].get("path", ""))).name,
+                    "to_source": Path(
+                        str(analyses[chosen_take_index].get("path", ""))
+                    ).name,
                     "before": round(anchor_similarity, 2),
                     "after": round(chosen_similarity, 2),
                     "gain": round(chosen_similarity - anchor_similarity, 2),
-                    "previous_side_db": float(chosen_gate_metrics.get("previous_side_db", -120.0)),
-                    "following_side_db": float(chosen_gate_metrics.get("following_side_db", -120.0)),
+                    "previous_side_db": float(
+                        chosen_gate_metrics.get("previous_side_db", -120.0)
+                    ),
+                    "following_side_db": float(
+                        chosen_gate_metrics.get("following_side_db", -120.0)
+                    ),
                 }
             )
 
@@ -373,7 +405,9 @@ class VoiceSuitabilityOptimizer:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         sf.write(str(output_path), merged, self.sample_rate, subtype="PCM_24")
 
-        edits_sorted = sorted(edits, key=lambda entry: float(entry.get("gain", 0.0)), reverse=True)
+        edits_sorted = sorted(
+            edits, key=lambda entry: float(entry.get("gain", 0.0)), reverse=True
+        )
         return {
             "anchor_index": int(anchor_index),
             "anchor_source_name": Path(str(anchor.get("path", ""))).name,

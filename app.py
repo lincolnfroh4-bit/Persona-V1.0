@@ -47,7 +47,9 @@ def get_vc(sid):
     global n_spk, tgt_sr, net_g, vc, cpt, version
     if sid == "" or sid == []:
         global hubert_model
-        if hubert_model != None:  # 考虑到轮询, 需要加个判断看是否 sid 是由有模型切换到无模型的
+        if (
+            hubert_model != None
+        ):  # 考虑到轮询, 需要加个判断看是否 sid 是由有模型切换到无模型的
             print("clean_empty_cache")
             del net_g, n_spk, vc, hubert_model, tgt_sr  # ,cpt
             hubert_model = net_g = n_spk = vc = hubert_model = tgt_sr = None
@@ -209,11 +211,9 @@ app = gr.Blocks()
 with app:
     with gr.Tabs():
         with gr.TabItem("在线demo"):
-            gr.Markdown(
-                value="""
+            gr.Markdown(value="""
                 RVC 在线demo
-                """
-            )
+                """)
             sid = gr.Dropdown(label=i18n("推理音色"), choices=sorted(names))
             with gr.Column():
                 spk_item = gr.Slider(
@@ -231,12 +231,18 @@ with app:
                 outputs=[spk_item],
             )
             gr.Markdown(
-                value=i18n("男转女推荐+12key, 女转男推荐-12key, 如果音域爆炸导致音色失真也可以自己调整到合适音域. ")
+                value=i18n(
+                    "男转女推荐+12key, 女转男推荐-12key, 如果音域爆炸导致音色失真也可以自己调整到合适音域. "
+                )
             )
             vc_input3 = gr.Audio(label="上传音频（长度小于90秒）")
-            vc_transform0 = gr.Number(label=i18n("变调(整数, 半音数量, 升八度12降八度-12)"), value=0)
+            vc_transform0 = gr.Number(
+                label=i18n("变调(整数, 半音数量, 升八度12降八度-12)"), value=0
+            )
             f0method0 = gr.Radio(
-                label=i18n("选择音高提取算法,输入歌声可用pm提速,harvest低音好但巨慢无比,crepe效果好但吃GPU"),
+                label=i18n(
+                    "选择音高提取算法,输入歌声可用pm提速,harvest低音好但巨慢无比,crepe效果好但吃GPU"
+                ),
                 choices=["pm", "harvest", "crepe"],
                 value="pm",
                 interactive=True,
@@ -244,7 +250,9 @@ with app:
             filter_radius0 = gr.Slider(
                 minimum=0,
                 maximum=7,
-                label=i18n(">=3则使用对harvest音高识别的结果使用中值滤波，数值为滤波半径，使用可以削弱哑音"),
+                label=i18n(
+                    ">=3则使用对harvest音高识别的结果使用中值滤波，数值为滤波半径，使用可以削弱哑音"
+                ),
                 value=3,
                 step=1,
                 interactive=True,
@@ -279,19 +287,25 @@ with app:
             rms_mix_rate0 = gr.Slider(
                 minimum=0,
                 maximum=1,
-                label=i18n("输入源音量包络替换输出音量包络融合比例，越靠近1越使用输出包络"),
+                label=i18n(
+                    "输入源音量包络替换输出音量包络融合比例，越靠近1越使用输出包络"
+                ),
                 value=1,
                 interactive=True,
             )
             protect0 = gr.Slider(
                 minimum=0,
                 maximum=0.5,
-                label=i18n("保护清辅音和呼吸声，防止电音撕裂等artifact，拉满0.5不开启，调低加大保护力度但可能降低索引效果"),
+                label=i18n(
+                    "保护清辅音和呼吸声，防止电音撕裂等artifact，拉满0.5不开启，调低加大保护力度但可能降低索引效果"
+                ),
                 value=0.33,
                 step=0.01,
                 interactive=True,
             )
-            f0_file = gr.File(label=i18n("F0曲线文件, 可选, 一行一个音高, 代替默认F0及升降调"))
+            f0_file = gr.File(
+                label=i18n("F0曲线文件, 可选, 一行一个音高, 代替默认F0及升降调")
+            )
             but0 = gr.Button(i18n("转换"), variant="primary")
             vc_output1 = gr.Textbox(label=i18n("输出信息"))
             vc_output2 = gr.Audio(label=i18n("输出音频(右下角三个点,点了可以下载)"))

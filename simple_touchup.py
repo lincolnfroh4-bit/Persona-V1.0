@@ -27,7 +27,9 @@ from scipy.signal import istft, stft
 
 def normalize_lyrics(text: str) -> str:
     lowered = (text or "").lower()
-    cleaned = "".join(char if char.isalnum() or char in {"'", " "} else " " for char in lowered)
+    cleaned = "".join(
+        char if char.isalnum() or char in {"'", " "} else " " for char in lowered
+    )
     collapsed = " ".join(cleaned.split())
     return collapsed
 
@@ -99,7 +101,9 @@ class LetterAwarePronunciationScorer:
             emissions, _ = self._model(waveform.unsqueeze(0).to(self._device))
         lpz = torch.log_softmax(emissions[0], dim=-1).detach().cpu().numpy()
         ground_truth_mat, utt_begin_indices = prepare_text(self._config, entries)
-        timings, char_probs, state_list = ctc_segmentation(self._config, lpz, ground_truth_mat)
+        timings, char_probs, state_list = ctc_segmentation(
+            self._config, lpz, ground_truth_mat
+        )
         segments = determine_utterance_segments(
             self._config,
             utt_begin_indices,
@@ -121,7 +125,9 @@ class LetterAwarePronunciationScorer:
         if not letters:
             return []
         try:
-            timings, char_probs, state_list, _ = self._run_ctc_alignment(waveform, ["".join(letters)])
+            timings, char_probs, state_list, _ = self._run_ctc_alignment(
+                waveform, ["".join(letters)]
+            )
         except Exception:
             return []
 
@@ -151,7 +157,11 @@ class LetterAwarePronunciationScorer:
                 continue
             cursor = best_index + 1
             start_time = float(timings[min(best_index, len(timings) - 1)])
-            end_time = float(timings[min(best_index + 1, len(timings) - 1)]) if len(timings) > 1 else start_time
+            end_time = (
+                float(timings[min(best_index + 1, len(timings) - 1)])
+                if len(timings) > 1
+                else start_time
+            )
             confidence = float(char_probs[best_index])
             matches.append(
                 {
@@ -170,11 +180,18 @@ class LetterAwarePronunciationScorer:
         word_scores: List[Dict[str, float | str]],
         letter_scores: List[Dict[str, float | str]],
     ) -> Tuple[str, str]:
-        weak_words = sorted(word_scores, key=lambda entry: float(entry["similarity"]))[:8]
-        weak_letters = sorted(letter_scores, key=lambda entry: float(entry["similarity"]))[:12]
+        weak_words = sorted(word_scores, key=lambda entry: float(entry["similarity"]))[
+            :8
+        ]
+        weak_letters = sorted(
+            letter_scores, key=lambda entry: float(entry["similarity"])
+        )[:12]
         word_report = (
             "Weakest words: "
-            + ", ".join(f"{entry['word']} ({float(entry['similarity']):.0f}%)" for entry in weak_words)
+            + ", ".join(
+                f"{entry['word']} ({float(entry['similarity']):.0f}%)"
+                for entry in weak_words
+            )
             if weak_words
             else "No weak words were found."
         )
@@ -200,13 +217,26 @@ class LetterAwarePronunciationScorer:
         )
         ordered_letter_scores = sorted(
             (dict(entry) for entry in letter_scores),
-            key=lambda entry: (int(entry.get("word_index", 0)), float(entry.get("start", 0.0))),
+            key=lambda entry: (
+                int(entry.get("word_index", 0)),
+                float(entry.get("start", 0.0)),
+            ),
         )
         word_similarity = round(
-            float(np.mean([float(entry["similarity"]) for entry in ordered_word_scores])) if ordered_word_scores else 0.0,
+            (
+                float(
+                    np.mean(
+                        [float(entry["similarity"]) for entry in ordered_word_scores]
+                    )
+                )
+                if ordered_word_scores
+                else 0.0
+            ),
             2,
         )
-        word_report, letter_report = self._build_reports(ordered_word_scores, ordered_letter_scores)
+        word_report, letter_report = self._build_reports(
+            ordered_word_scores, ordered_letter_scores
+        )
         return {
             "similarity_score": word_similarity,
             "word_scores": ordered_word_scores,
@@ -227,7 +257,8 @@ class LetterAwarePronunciationScorer:
         for local_index, word in enumerate(words):
             absolute_index = (
                 int(absolute_word_indices[local_index])
-                if absolute_word_indices is not None and local_index < len(absolute_word_indices)
+                if absolute_word_indices is not None
+                and local_index < len(absolute_word_indices)
                 else int(local_index)
             )
             fallback_scores.append(
@@ -287,7 +318,8 @@ class LetterAwarePronunciationScorer:
         for local_index, (word, segment) in enumerate(zip(words, word_segments)):
             absolute_index = (
                 int(absolute_word_indices[local_index])
-                if absolute_word_indices is not None and local_index < len(absolute_word_indices)
+                if absolute_word_indices is not None
+                and local_index < len(absolute_word_indices)
                 else int(local_index)
             )
             start, end, confidence = segment
@@ -306,7 +338,9 @@ class LetterAwarePronunciationScorer:
             start_sample = max(0, int(float(start) * self._sample_rate))
             end_sample = min(total_samples, int(float(end) * self._sample_rate))
             if end_sample <= start_sample:
-                word_waveform = waveform[max(0, start_sample) : max(0, start_sample + 1)]
+                word_waveform = waveform[
+                    max(0, start_sample) : max(0, start_sample + 1)
+                ]
             else:
                 word_waveform = waveform[start_sample:end_sample]
             scored_words.append((entry, word_waveform))
@@ -316,7 +350,9 @@ class LetterAwarePronunciationScorer:
             return self.build_analysis_result([], [])
 
         weak_word_limit = max(1, min(int(letter_focus_limit), len(word_scores)))
-        weak_words = sorted(word_scores, key=lambda entry: float(entry["similarity"]))[:weak_word_limit]
+        weak_words = sorted(word_scores, key=lambda entry: float(entry["similarity"]))[
+            :weak_word_limit
+        ]
         weak_indices = {
             int(entry["index"])
             for entry in weak_words
@@ -342,7 +378,9 @@ class LetterAwarePronunciationScorer:
 
         return self.build_analysis_result(word_scores, letter_scores)
 
-    def analyze_audio(self, audio: np.ndarray, sample_rate: int, expected_lyrics: str) -> Dict[str, object]:
+    def analyze_audio(
+        self, audio: np.ndarray, sample_rate: int, expected_lyrics: str
+    ) -> Dict[str, object]:
         return self._analyze_words(audio, sample_rate, lyrics_to_words(expected_lyrics))
 
     def analyze_segment(
@@ -418,9 +456,15 @@ class NeuralClarityRepairEngine:
 
     def get_regenerator_status(self) -> Dict[str, object]:
         if not self._tts_python.exists():
-            return {"available": False, "reason": "The separate XTTS Python environment was not found."}
+            return {
+                "available": False,
+                "reason": "The separate XTTS Python environment was not found.",
+            }
         if not self._tts_runner.exists():
-            return {"available": False, "reason": "The XTTS word regeneration runner is missing."}
+            return {
+                "available": False,
+                "reason": "The XTTS word regeneration runner is missing.",
+            }
         if not self._coqui_tos_agreed():
             return {
                 "available": False,
@@ -428,7 +472,9 @@ class NeuralClarityRepairEngine:
             }
         return {"available": True, "reason": "XTTS word regeneration is ready."}
 
-    def _load_audio(self, file_path: Path, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
+    def _load_audio(
+        self, file_path: Path, sample_rate: int = 44100
+    ) -> Tuple[np.ndarray, int]:
         cleaned = str(file_path).strip().strip('"')
         out, _ = (
             ffmpeg.input(cleaned, threads=0)
@@ -503,8 +549,16 @@ class NeuralClarityRepairEngine:
         padding_ms: float,
     ) -> Tuple[int, int]:
         word_by_index = {int(entry["index"]): entry for entry in word_scores}
-        starts = [float(word_by_index[index]["start"]) for index in word_indices if index in word_by_index]
-        ends = [float(word_by_index[index]["end"]) for index in word_indices if index in word_by_index]
+        starts = [
+            float(word_by_index[index]["start"])
+            for index in word_indices
+            if index in word_by_index
+        ]
+        ends = [
+            float(word_by_index[index]["end"])
+            for index in word_indices
+            if index in word_by_index
+        ]
         if not starts or not ends:
             return 0, 0
         pad = int((padding_ms / 1000.0) * sample_rate)
@@ -516,7 +570,9 @@ class NeuralClarityRepairEngine:
         working = np.asarray(audio, dtype=np.float32)
         if working.ndim == 1:
             working = working[:, np.newaxis]
-        channels = int(working.shape[1]) if working.ndim == 2 and working.shape[1] > 0 else 1
+        channels = (
+            int(working.shape[1]) if working.ndim == 2 and working.shape[1] > 0 else 1
+        )
         if target_length <= 0:
             return np.zeros((0, channels), dtype=np.float32)
         if working.shape[0] == 0:
@@ -524,12 +580,18 @@ class NeuralClarityRepairEngine:
         if working.shape[0] == target_length:
             return working.astype(np.float32, copy=False)
         if working.shape[0] == 1:
-            return np.repeat(working.astype(np.float32, copy=False), target_length, axis=0)
+            return np.repeat(
+                working.astype(np.float32, copy=False), target_length, axis=0
+            )
         source_positions = np.linspace(0.0, 1.0, num=working.shape[0], dtype=np.float32)
         target_positions = np.linspace(0.0, 1.0, num=target_length, dtype=np.float32)
         resized_channels = []
         for channel in range(working.shape[1]):
-            resized_channels.append(np.interp(target_positions, source_positions, working[:, channel]).astype(np.float32))
+            resized_channels.append(
+                np.interp(
+                    target_positions, source_positions, working[:, channel]
+                ).astype(np.float32)
+            )
         return np.stack(resized_channels, axis=1)
 
     def _merge_sample_windows(
@@ -540,7 +602,11 @@ class NeuralClarityRepairEngine:
     ) -> List[Tuple[int, int]]:
         if not windows:
             return []
-        ordered = sorted((max(0, int(start)), max(0, int(end))) for start, end in windows if int(end) > int(start))
+        ordered = sorted(
+            (max(0, int(start)), max(0, int(end)))
+            for start, end in windows
+            if int(end) > int(start)
+        )
         if not ordered:
             return []
         merged: List[Tuple[int, int]] = [ordered[0]]
@@ -564,29 +630,42 @@ class NeuralClarityRepairEngine:
     ) -> Dict[str, object]:
         output_dir.mkdir(parents=True, exist_ok=True)
         source_audio, sample_rate = self._load_audio(source_path, sample_rate=44100)
-        baseline_scoring = self.scorer.analyze_audio(source_audio, sample_rate, intended_lyrics)
+        baseline_scoring = self.scorer.analyze_audio(
+            source_audio, sample_rate, intended_lyrics
+        )
         word_scores = [dict(entry) for entry in baseline_scoring.get("word_scores", [])]
 
         if not word_scores:
             output_path = output_dir / f"{source_path.stem}_smart_removed.wav"
             removed_path = output_dir / f"{source_path.stem}_removed_layer.wav"
             sf.write(output_path, source_audio, sample_rate, subtype="PCM_24")
-            sf.write(removed_path, np.zeros_like(source_audio, dtype=np.float32), sample_rate, subtype="PCM_24")
+            sf.write(
+                removed_path,
+                np.zeros_like(source_audio, dtype=np.float32),
+                sample_rate,
+                subtype="PCM_24",
+            )
             return {
                 "output_path": output_path,
                 "removed_path": removed_path,
                 "sample_rate": sample_rate,
                 "source_rms_db": self._safe_rms_db(source_audio),
                 "output_rms_db": self._safe_rms_db(source_audio),
-                "best_similarity_score": float(baseline_scoring.get("similarity_score", 0.0)),
+                "best_similarity_score": float(
+                    baseline_scoring.get("similarity_score", 0.0)
+                ),
                 "best_word_report": str(baseline_scoring.get("word_report", "")),
                 "best_letter_report": str(baseline_scoring.get("letter_report", "")),
                 "best_word_scores": word_scores,
                 "best_letter_scores": list(baseline_scoring.get("letter_scores", [])),
-                "detected_word_indices": [int(entry.get("index", 0)) for entry in word_scores],
+                "detected_word_indices": [
+                    int(entry.get("index", 0)) for entry in word_scores
+                ],
                 "kept_segment_count": 0,
                 "kept_duration_seconds": 0.0,
-                "removed_duration_seconds": float(source_audio.shape[0] / max(sample_rate, 1)),
+                "removed_duration_seconds": float(
+                    source_audio.shape[0] / max(sample_rate, 1)
+                ),
                 "repair_attempts": 0,
                 "variants_tested": 0,
                 "repaired_word_count": 0,
@@ -603,10 +682,15 @@ class NeuralClarityRepairEngine:
         for entry in word_scores:
             if cancel_event.is_set():
                 break
-            start = max(0, int(float(entry.get("start", 0.0)) * sample_rate) - int((keep_padding_ms / 1000.0) * sample_rate))
+            start = max(
+                0,
+                int(float(entry.get("start", 0.0)) * sample_rate)
+                - int((keep_padding_ms / 1000.0) * sample_rate),
+            )
             end = min(
                 total_samples,
-                int(float(entry.get("end", 0.0)) * sample_rate) + int((keep_padding_ms / 1000.0) * sample_rate),
+                int(float(entry.get("end", 0.0)) * sample_rate)
+                + int((keep_padding_ms / 1000.0) * sample_rate),
             )
             if end > start:
                 keep_windows.append((start, end))
@@ -626,8 +710,12 @@ class NeuralClarityRepairEngine:
             edge = min(fade_samples, max(1, segment_length // 3))
             if edge > 1:
                 fade_curve = self._cosine_fade(edge)
-                keep_mask[start : start + edge] = np.maximum(keep_mask[start : start + edge], fade_curve[:edge])
-                keep_mask[end - edge : end] = np.maximum(keep_mask[end - edge : end], fade_curve[-edge:])
+                keep_mask[start : start + edge] = np.maximum(
+                    keep_mask[start : start + edge], fade_curve[:edge]
+                )
+                keep_mask[end - edge : end] = np.maximum(
+                    keep_mask[end - edge : end], fade_curve[-edge:]
+                )
 
         if update_status is not None:
             update_status(
@@ -636,10 +724,16 @@ class NeuralClarityRepairEngine:
                     "message": (
                         f"Keeping {len(merged_windows)} lyric regions and muting everything else."
                     ),
-                    "best_similarity_score": float(baseline_scoring.get("similarity_score", 0.0)),
+                    "best_similarity_score": float(
+                        baseline_scoring.get("similarity_score", 0.0)
+                    ),
                     "best_word_report": str(baseline_scoring.get("word_report", "")),
-                    "best_letter_report": str(baseline_scoring.get("letter_report", "")),
-                    "detected_word_indices": [int(entry.get("index", 0)) for entry in word_scores],
+                    "best_letter_report": str(
+                        baseline_scoring.get("letter_report", "")
+                    ),
+                    "detected_word_indices": [
+                        int(entry.get("index", 0)) for entry in word_scores
+                    ],
                     "repaired_word_count": 0,
                     "variants_tested": 0,
                     "repair_attempts": 0,
@@ -655,8 +749,18 @@ class NeuralClarityRepairEngine:
 
         output_path = output_dir / f"{source_path.stem}_smart_removed.wav"
         removed_path = output_dir / f"{source_path.stem}_removed_layer.wav"
-        sf.write(output_path, kept_audio.astype(np.float32, copy=False), sample_rate, subtype="PCM_24")
-        sf.write(removed_path, removed_audio.astype(np.float32, copy=False), sample_rate, subtype="PCM_24")
+        sf.write(
+            output_path,
+            kept_audio.astype(np.float32, copy=False),
+            sample_rate,
+            subtype="PCM_24",
+        )
+        sf.write(
+            removed_path,
+            removed_audio.astype(np.float32, copy=False),
+            sample_rate,
+            subtype="PCM_24",
+        )
 
         kept_duration_seconds = float(np.sum(keep_mask > 0.5) / max(sample_rate, 1))
         total_duration_seconds = float(total_samples / max(sample_rate, 1))
@@ -666,15 +770,21 @@ class NeuralClarityRepairEngine:
             "sample_rate": sample_rate,
             "source_rms_db": self._safe_rms_db(source_audio),
             "output_rms_db": self._safe_rms_db(kept_audio),
-            "best_similarity_score": float(baseline_scoring.get("similarity_score", 0.0)),
+            "best_similarity_score": float(
+                baseline_scoring.get("similarity_score", 0.0)
+            ),
             "best_word_report": str(baseline_scoring.get("word_report", "")),
             "best_letter_report": str(baseline_scoring.get("letter_report", "")),
             "best_word_scores": word_scores,
             "best_letter_scores": list(baseline_scoring.get("letter_scores", [])),
-            "detected_word_indices": [int(entry.get("index", 0)) for entry in word_scores],
+            "detected_word_indices": [
+                int(entry.get("index", 0)) for entry in word_scores
+            ],
             "kept_segment_count": int(len(merged_windows)),
             "kept_duration_seconds": kept_duration_seconds,
-            "removed_duration_seconds": max(0.0, total_duration_seconds - kept_duration_seconds),
+            "removed_duration_seconds": max(
+                0.0, total_duration_seconds - kept_duration_seconds
+            ),
             "repair_attempts": 0,
             "variants_tested": 0,
             "repaired_word_count": 0,
@@ -718,14 +828,20 @@ class NeuralClarityRepairEngine:
             raise RuntimeError(stderr or "XTTS word generation failed.")
         return output_path
 
-    def _resample_mono(self, audio: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+    def _resample_mono(
+        self, audio: np.ndarray, source_rate: int, target_rate: int
+    ) -> np.ndarray:
         if source_rate == target_rate:
             return audio.astype(np.float32, copy=False)
         tensor = torch.from_numpy(audio.astype(np.float32, copy=False)).unsqueeze(0)
-        resampled = torchaudio.functional.resample(tensor, orig_freq=source_rate, new_freq=target_rate)
+        resampled = torchaudio.functional.resample(
+            tensor, orig_freq=source_rate, new_freq=target_rate
+        )
         return resampled.squeeze(0).cpu().numpy().astype(np.float32, copy=False)
 
-    def _enhance_mono_segment(self, mono_audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    def _enhance_mono_segment(
+        self, mono_audio: np.ndarray, sample_rate: int
+    ) -> np.ndarray:
         self._ensure_enhancer()
         assert self._enhancer is not None
         target_rate = int(self._enhancer_sample_rate)
@@ -733,7 +849,13 @@ class NeuralClarityRepairEngine:
         waveform = torch.from_numpy(working).unsqueeze(0).to(self._enhancer.device)
         lengths = torch.ones(1, device=self._enhancer.device)
         with torch.no_grad():
-            enhanced = self._enhancer.enhance_batch(waveform, lengths).detach().cpu().squeeze(0).numpy()
+            enhanced = (
+                self._enhancer.enhance_batch(waveform, lengths)
+                .detach()
+                .cpu()
+                .squeeze(0)
+                .numpy()
+            )
         return self._resample_mono(enhanced, target_rate, sample_rate)
 
     def _build_pronunciation_embedding(
@@ -771,7 +893,9 @@ class NeuralClarityRepairEngine:
             mfcc = librosa.feature.mfcc(S=log_mel, n_mfcc=20)
             delta = librosa.feature.delta(mfcc, mode="nearest")
             rms = librosa.feature.rms(y=mono, frame_length=n_fft, hop_length=hop_length)
-            zcr = librosa.feature.zero_crossing_rate(y=mono, frame_length=n_fft, hop_length=hop_length)
+            zcr = librosa.feature.zero_crossing_rate(
+                y=mono, frame_length=n_fft, hop_length=hop_length
+            )
             centroid = librosa.feature.spectral_centroid(
                 y=mono,
                 sr=sample_rate,
@@ -795,7 +919,9 @@ class NeuralClarityRepairEngine:
                 ],
                 axis=0,
             )
-            vector = np.concatenate([feature_stack.mean(axis=1), feature_stack.std(axis=1)]).astype(np.float32)
+            vector = np.concatenate(
+                [feature_stack.mean(axis=1), feature_stack.std(axis=1)]
+            ).astype(np.float32)
         except Exception:
             return None
         if not np.all(np.isfinite(vector)):
@@ -847,7 +973,9 @@ class NeuralClarityRepairEngine:
             if end <= start:
                 continue
             source_segment = np.asarray(source_audio[start:end], dtype=np.float32)
-            source_embedding = self._build_pronunciation_embedding(source_segment, sample_rate)
+            source_embedding = self._build_pronunciation_embedding(
+                source_segment, sample_rate
+            )
             if source_embedding is None:
                 continue
             try:
@@ -874,8 +1002,12 @@ class NeuralClarityRepairEngine:
                 cached_embedding = reference_cache.get(cache_key)
                 if cached_embedding is None and cache_key not in reference_cache:
                     try:
-                        reference_audio, _ = self._load_audio(bank_file, sample_rate=sample_rate)
-                        cached_embedding = self._build_pronunciation_embedding(reference_audio, sample_rate)
+                        reference_audio, _ = self._load_audio(
+                            bank_file, sample_rate=sample_rate
+                        )
+                        cached_embedding = self._build_pronunciation_embedding(
+                            reference_audio, sample_rate
+                        )
                     except Exception:
                         cached_embedding = None
                     reference_cache[cache_key] = cached_embedding
@@ -883,12 +1015,16 @@ class NeuralClarityRepairEngine:
                     cached_embedding = reference_cache[cache_key]
                 if cached_embedding is None:
                     continue
-                similarity = self._embedding_similarity_score(source_embedding, cached_embedding)
+                similarity = self._embedding_similarity_score(
+                    source_embedding, cached_embedding
+                )
                 if best_similarity is None or similarity > best_similarity:
                     best_similarity = similarity
 
             if best_similarity is not None:
-                bank_similarity[word_index] = float(np.clip(best_similarity, 0.0, 100.0))
+                bank_similarity[word_index] = float(
+                    np.clip(best_similarity, 0.0, 100.0)
+                )
 
         combined_priority: Dict[int, float] = {}
         for entry in word_scores:
@@ -928,7 +1064,9 @@ class NeuralClarityRepairEngine:
         if len(chosen) < max_words:
             weak_letter_words = [
                 int(entry.get("word_index", -1))
-                for entry in sorted(letter_scores, key=lambda entry: float(entry.get("similarity", 0.0)))
+                for entry in sorted(
+                    letter_scores, key=lambda entry: float(entry.get("similarity", 0.0))
+                )
                 if int(entry.get("word_index", -1)) >= 0
             ]
             for word_index in weak_letter_words:
@@ -952,7 +1090,9 @@ class NeuralClarityRepairEngine:
     ) -> np.ndarray:
         mono_source = source_segment.mean(axis=1).astype(np.float32, copy=False)
         enhanced_mono = self._enhance_mono_segment(mono_source, sample_rate)
-        enhanced_mono = librosa.util.fix_length(enhanced_mono.astype(np.float32), size=mono_source.shape[0])
+        enhanced_mono = librosa.util.fix_length(
+            enhanced_mono.astype(np.float32), size=mono_source.shape[0]
+        )
 
         source_low = gaussian_filter1d(mono_source, sigma=3.0, mode="nearest")
         enhanced_low = gaussian_filter1d(enhanced_mono, sigma=3.0, mode="nearest")
@@ -965,7 +1105,9 @@ class NeuralClarityRepairEngine:
         onset = onset / max(float(np.max(onset)), 1e-6)
         transient_layer = detail_layer * onset
 
-        enhanced_stereo = np.repeat(enhanced_mono[:, np.newaxis], source_segment.shape[1], axis=1)
+        enhanced_stereo = np.repeat(
+            enhanced_mono[:, np.newaxis], source_segment.shape[1], axis=1
+        )
         repaired = ((1.0 - ai_blend) * source_segment) + (ai_blend * enhanced_stereo)
         repaired = repaired + (
             np.repeat(detail_layer[:, np.newaxis], source_segment.shape[1], axis=1)
@@ -1037,9 +1179,8 @@ class NeuralClarityRepairEngine:
             mix_curve[:fade_size] = fade[:fade_size]
             mix_curve[-fade_size:] = fade[-fade_size:]
             output_audio[start:end] = (
-                ((1.0 - mix_curve[:, np.newaxis]) * output_audio[start:end])
-                + (mix_curve[:, np.newaxis] * patched)
-            )
+                (1.0 - mix_curve[:, np.newaxis]) * output_audio[start:end]
+            ) + (mix_curve[:, np.newaxis] * patched)
 
         peak = float(np.max(np.abs(output_audio))) if output_audio.size else 0.0
         if peak > 0.995:
@@ -1073,12 +1214,18 @@ class NeuralClarityRepairEngine:
         sibilance_band = freqs >= 4500.0
 
         source_mono = source_segment.mean(axis=1).astype(np.float32, copy=False)
-        smoothed = gaussian_filter1d(source_mono, sigma=float(params["time_smooth_sigma"]), mode="nearest")
+        smoothed = gaussian_filter1d(
+            source_mono, sigma=float(params["time_smooth_sigma"]), mode="nearest"
+        )
         transient = source_mono - smoothed
         onset_env = np.abs(np.diff(np.concatenate([[source_mono[0]], source_mono])))
-        onset_env = gaussian_filter1d(onset_env, sigma=float(params["onset_sigma"]), mode="nearest")
+        onset_env = gaussian_filter1d(
+            onset_env, sigma=float(params["onset_sigma"]), mode="nearest"
+        )
         onset_env = onset_env / max(float(np.max(onset_env)), 1e-6)
-        letter_focus = np.linspace(1.0, float(params["tail_focus"]), target_length, dtype=np.float32)
+        letter_focus = np.linspace(
+            1.0, float(params["tail_focus"]), target_length, dtype=np.float32
+        )
         transient_drive = transient * onset_env * letter_focus
 
         repaired_channels = []
@@ -1094,7 +1241,12 @@ class NeuralClarityRepairEngine:
             )
             source_mag = np.abs(source_spec).astype(np.float32, copy=False)
             source_phase = np.angle(source_spec).astype(np.float32, copy=False)
-            smooth_mag = gaussian_filter1d(source_mag, sigma=float(params["freq_smooth_sigma"]), axis=0, mode="nearest")
+            smooth_mag = gaussian_filter1d(
+                source_mag,
+                sigma=float(params["freq_smooth_sigma"]),
+                axis=0,
+                mode="nearest",
+            )
             unsharp = np.maximum(source_mag - smooth_mag, 0.0)
             mixed_mag = source_mag.copy()
 
@@ -1125,7 +1277,9 @@ class NeuralClarityRepairEngine:
                 kernel_size=(13, 19),
                 margin=(1.0, 2.5),
             )
-            mixed_mag = harm_mag + (perc_mag * (1.0 + float(params["percussive_gain"]) * weakness))
+            mixed_mag = harm_mag + (
+                perc_mag * (1.0 + float(params["percussive_gain"]) * weakness)
+            )
 
             rebuilt_spec = mixed_mag * np.exp(1j * source_phase)
             _, repaired = istft(
@@ -1137,17 +1291,29 @@ class NeuralClarityRepairEngine:
                 input_onesided=True,
                 boundary=True,
             )
-            repaired = librosa.util.fix_length(repaired.astype(np.float32), size=target_length)
+            repaired = librosa.util.fix_length(
+                repaired.astype(np.float32), size=target_length
+            )
             repaired_channels.append(repaired)
 
-        repaired_audio = np.stack(repaired_channels, axis=1).astype(np.float32, copy=False)
-        transient_boost = transient_drive[:, np.newaxis] * float(params["transient_gain"]) * (0.18 + 1.05 * weakness)
+        repaired_audio = np.stack(repaired_channels, axis=1).astype(
+            np.float32, copy=False
+        )
+        transient_boost = (
+            transient_drive[:, np.newaxis]
+            * float(params["transient_gain"])
+            * (0.18 + 1.05 * weakness)
+        )
         repaired_audio = repaired_audio + transient_boost
-        stereo_detail = source_segment - gaussian_filter1d(source_segment, sigma=2.0, axis=0, mode="nearest")
+        stereo_detail = source_segment - gaussian_filter1d(
+            source_segment, sigma=2.0, axis=0, mode="nearest"
+        )
         repaired_audio = repaired_audio + (
             stereo_detail * float(params["detail_mix"]) * (0.08 + 0.55 * weakness)
         )
-        blend = np.clip(float(params["local_blend"]) * (0.16 + 0.90 * weakness), 0.08, 0.92)
+        blend = np.clip(
+            float(params["local_blend"]) * (0.16 + 0.90 * weakness), 0.08, 0.92
+        )
         return ((1.0 - blend) * source_segment) + (blend * repaired_audio)
 
     def _render_variant(
@@ -1164,11 +1330,21 @@ class NeuralClarityRepairEngine:
 
         weak_threshold = float(params["weak_letter_threshold"])
         weak_letters = [
-            entry for entry in letter_scores if float(entry.get("similarity", 0.0)) < weak_threshold
+            entry
+            for entry in letter_scores
+            if float(entry.get("similarity", 0.0)) < weak_threshold
         ]
         if not weak_letters:
-            weak_letters = sorted(letter_scores, key=lambda entry: float(entry.get("similarity", 0.0)))
-        max_targets = max(1, min(int(params["max_target_letters"]), len(weak_letters) if weak_letters else 1))
+            weak_letters = sorted(
+                letter_scores, key=lambda entry: float(entry.get("similarity", 0.0))
+            )
+        max_targets = max(
+            1,
+            min(
+                int(params["max_target_letters"]),
+                len(weak_letters) if weak_letters else 1,
+            ),
+        )
         weak_letters = weak_letters[:max_targets]
 
         padding_ms = float(params["padding_ms"])
@@ -1180,7 +1356,9 @@ class NeuralClarityRepairEngine:
             word_index = int(letter.get("word_index", -1))
             if word_index >= 0:
                 target_word_indices.add(word_index)
-            start, end = self._letter_window_to_samples(letter, sample_rate, total_samples, padding_ms)
+            start, end = self._letter_window_to_samples(
+                letter, sample_rate, total_samples, padding_ms
+            )
             segment = output_audio[start:end]
             if segment.shape[0] < int(0.04 * sample_rate):
                 continue
@@ -1194,9 +1372,8 @@ class NeuralClarityRepairEngine:
             mix_curve[:fade_size] = fade[:fade_size]
             mix_curve[-fade_size:] = fade[-fade_size:]
             output_audio[start:end] = (
-                ((1.0 - mix_curve[:, np.newaxis]) * output_audio[start:end])
-                + (mix_curve[:, np.newaxis] * patched)
-            )
+                (1.0 - mix_curve[:, np.newaxis]) * output_audio[start:end]
+            ) + (mix_curve[:, np.newaxis] * patched)
 
         peak = float(np.max(np.abs(output_audio))) if output_audio.size else 0.0
         if peak > 0.995:
@@ -1228,19 +1405,33 @@ class NeuralClarityRepairEngine:
             metadata = self._render_variant(prepared, output_path, params)
         full_output = np.asarray(metadata["output_audio"], dtype=np.float32)
         sample_rate = int(metadata["sample_rate"])
-        intended_words = list(prepared.get("intended_words", lyrics_to_words(intended_lyrics)))
-        previous_word_scores = [dict(entry) for entry in prepared.get("word_scores", [])]
-        previous_letter_scores = [dict(entry) for entry in prepared.get("letter_scores", [])]
-        target_word_indices = [int(index) for index in metadata.get("target_word_indices", [])]
+        intended_words = list(
+            prepared.get("intended_words", lyrics_to_words(intended_lyrics))
+        )
+        previous_word_scores = [
+            dict(entry) for entry in prepared.get("word_scores", [])
+        ]
+        previous_letter_scores = [
+            dict(entry) for entry in prepared.get("letter_scores", [])
+        ]
+        target_word_indices = [
+            int(index) for index in metadata.get("target_word_indices", [])
+        ]
 
         if not previous_word_scores or not target_word_indices:
-            scoring = self.scorer.analyze_audio(full_output, sample_rate, intended_lyrics)
+            scoring = self.scorer.analyze_audio(
+                full_output, sample_rate, intended_lyrics
+            )
         else:
             expanded_indices: List[int] = []
             for index in target_word_indices:
-                expanded_indices.extend(range(max(0, index - 1), min(len(intended_words), index + 2)))
+                expanded_indices.extend(
+                    range(max(0, index - 1), min(len(intended_words), index + 2))
+                )
             groups = self._group_contiguous_indices(expanded_indices)
-            word_by_index = {int(entry["index"]): dict(entry) for entry in previous_word_scores}
+            word_by_index = {
+                int(entry["index"]): dict(entry) for entry in previous_word_scores
+            }
             rescored_indices = {index for group in groups for index in group}
             merged_letter_scores = [
                 dict(entry)
@@ -1256,8 +1447,13 @@ class NeuralClarityRepairEngine:
                 last_index = group[-1]
                 if first_index not in word_by_index or last_index not in word_by_index:
                     continue
-                segment_start = max(0.0, float(word_by_index[first_index]["start"]) - 0.08)
-                segment_end = min(full_duration_seconds, float(word_by_index[last_index]["end"]) + 0.08)
+                segment_start = max(
+                    0.0, float(word_by_index[first_index]["start"]) - 0.08
+                )
+                segment_end = min(
+                    full_duration_seconds,
+                    float(word_by_index[last_index]["end"]) + 0.08,
+                )
                 start_sample = max(0, int(segment_start * sample_rate))
                 end_sample = min(full_output.shape[0], int(segment_end * sample_rate))
                 if end_sample <= start_sample:
@@ -1273,10 +1469,16 @@ class NeuralClarityRepairEngine:
                 )
                 for entry in local_result["word_scores"]:
                     word_by_index[int(entry["index"])] = dict(entry)
-                merged_letter_scores.extend(dict(entry) for entry in local_result["letter_scores"])
+                merged_letter_scores.extend(
+                    dict(entry) for entry in local_result["letter_scores"]
+                )
 
-            merged_word_scores = [word_by_index[index] for index in sorted(word_by_index)]
-            scoring = self.scorer.build_analysis_result(merged_word_scores, merged_letter_scores)
+            merged_word_scores = [
+                word_by_index[index] for index in sorted(word_by_index)
+            ]
+            scoring = self.scorer.build_analysis_result(
+                merged_word_scores, merged_letter_scores
+            )
 
         metadata["word_report"] = str(scoring["word_report"])
         metadata["letter_report"] = str(scoring["letter_report"])
@@ -1301,9 +1503,13 @@ class NeuralClarityRepairEngine:
 
         expanded_indices: List[int] = []
         for index in target_word_indices:
-            expanded_indices.extend(range(max(0, index - 1), min(len(intended_words), index + 2)))
+            expanded_indices.extend(
+                range(max(0, index - 1), min(len(intended_words), index + 2))
+            )
         groups = self._group_contiguous_indices(expanded_indices)
-        word_by_index = {int(entry["index"]): dict(entry) for entry in previous_word_scores}
+        word_by_index = {
+            int(entry["index"]): dict(entry) for entry in previous_word_scores
+        }
         rescored_indices = {index for group in groups for index in group}
         merged_letter_scores = [
             dict(entry)
@@ -1320,7 +1526,9 @@ class NeuralClarityRepairEngine:
             if first_index not in word_by_index or last_index not in word_by_index:
                 continue
             segment_start = max(0.0, float(word_by_index[first_index]["start"]) - 0.08)
-            segment_end = min(full_duration_seconds, float(word_by_index[last_index]["end"]) + 0.08)
+            segment_end = min(
+                full_duration_seconds, float(word_by_index[last_index]["end"]) + 0.08
+            )
             start_sample = max(0, int(segment_start * sample_rate))
             end_sample = min(full_output.shape[0], int(segment_end * sample_rate))
             if end_sample <= start_sample:
@@ -1336,10 +1544,14 @@ class NeuralClarityRepairEngine:
             )
             for entry in local_result["word_scores"]:
                 word_by_index[int(entry["index"])] = dict(entry)
-            merged_letter_scores.extend(dict(entry) for entry in local_result["letter_scores"])
+            merged_letter_scores.extend(
+                dict(entry) for entry in local_result["letter_scores"]
+            )
 
         merged_word_scores = [word_by_index[index] for index in sorted(word_by_index)]
-        return self.scorer.build_analysis_result(merged_word_scores, merged_letter_scores)
+        return self.scorer.build_analysis_result(
+            merged_word_scores, merged_letter_scores
+        )
 
     def _render_regenerated_candidate(
         self,
@@ -1379,15 +1591,16 @@ class NeuralClarityRepairEngine:
 
         source_segment = output_audio[start:end]
         mixed_segment = ((1.0 - blend) * source_segment) + (blend * generated_audio)
-        fade_size = min(max(8, int(0.02 * sample_rate)), max(1, mixed_segment.shape[0] // 3))
+        fade_size = min(
+            max(8, int(0.02 * sample_rate)), max(1, mixed_segment.shape[0] // 3)
+        )
         fade = self._cosine_fade(fade_size)
         mix_curve = np.ones(mixed_segment.shape[0], dtype=np.float32)
         mix_curve[:fade_size] = fade[:fade_size]
         mix_curve[-fade_size:] = fade[-fade_size:]
         output_audio[start:end] = (
-            ((1.0 - mix_curve[:, np.newaxis]) * source_segment)
-            + (mix_curve[:, np.newaxis] * mixed_segment)
-        )
+            (1.0 - mix_curve[:, np.newaxis]) * source_segment
+        ) + (mix_curve[:, np.newaxis] * mixed_segment)
 
         peak = float(np.max(np.abs(output_audio))) if output_audio.size else 0.0
         if peak > 0.995:
@@ -1453,11 +1666,17 @@ class NeuralClarityRepairEngine:
             "air_amount": float(0.06 + (0.54 * strength_ratio)),
             "detail_mix": float(0.14 + (0.52 * strength_ratio)),
             "local_blend": float(0.24 + (0.38 * strength_ratio)),
-            "freq_smooth_sigma": float(np.clip(1.45 - (0.55 * strength_ratio), 0.45, 2.1)),
-            "time_smooth_sigma": float(np.clip(1.95 - (0.65 * strength_ratio), 0.55, 2.8)),
+            "freq_smooth_sigma": float(
+                np.clip(1.45 - (0.55 * strength_ratio), 0.45, 2.1)
+            ),
+            "time_smooth_sigma": float(
+                np.clip(1.95 - (0.65 * strength_ratio), 0.55, 2.8)
+            ),
             "onset_sigma": float(np.clip(1.2 - (0.25 * strength_ratio), 0.25, 1.4)),
             "tail_focus": float(1.12 + (0.92 * strength_ratio)),
-            "weak_letter_threshold": float(np.clip(82.0 - (26.0 * strength_ratio), 40.0, 88.0)),
+            "weak_letter_threshold": float(
+                np.clip(82.0 - (26.0 * strength_ratio), 40.0, 88.0)
+            ),
             "max_target_letters": float(max(4, min(26, int(max_target_words) * 4))),
             "padding_ms": float(44.0 + (52.0 * strength_ratio)),
             "fade_ms": float(14.0 + (10.0 * strength_ratio)),
@@ -1476,23 +1695,118 @@ class NeuralClarityRepairEngine:
         while len(variants) < variants_per_batch:
             variants.append(
                 {
-                    "strength": float(np.clip(base_params["strength"] + rng.randint(-20, 20), 1, 100)),
-                    "presence_gain": float(np.clip(base_params["presence_gain"] + rng.uniform(-0.25, 0.35), 0.10, 2.50)),
-                    "sibilance_gain": float(np.clip(base_params["sibilance_gain"] + rng.uniform(-0.25, 0.35), 0.05, 2.80)),
-                    "transient_gain": float(np.clip(base_params["transient_gain"] + rng.uniform(-0.25, 0.35), 0.05, 2.50)),
-                    "percussive_gain": float(np.clip(base_params["percussive_gain"] + rng.uniform(-0.18, 0.26), 0.00, 2.20)),
-                    "unsharp_amount": float(np.clip(base_params["unsharp_amount"] + rng.uniform(-0.18, 0.24), 0.00, 2.40)),
-                    "air_amount": float(np.clip(base_params["air_amount"] + rng.uniform(-0.10, 0.18), 0.00, 1.80)),
-                    "detail_mix": float(np.clip(base_params["detail_mix"] + rng.uniform(-0.10, 0.18), 0.05, 1.2)),
-                    "local_blend": float(np.clip(base_params["local_blend"] + rng.uniform(-0.12, 0.18), 0.08, 0.95)),
-                    "freq_smooth_sigma": float(np.clip(base_params["freq_smooth_sigma"] + rng.uniform(-0.4, 0.8), 0.2, 4.0)),
-                    "time_smooth_sigma": float(np.clip(base_params["time_smooth_sigma"] + rng.uniform(-0.6, 0.8), 0.4, 6.0)),
-                    "onset_sigma": float(np.clip(base_params["onset_sigma"] + rng.uniform(-0.4, 0.6), 0.2, 4.0)),
-                    "tail_focus": float(np.clip(base_params["tail_focus"] + rng.uniform(-0.3, 0.4), 0.8, 2.6)),
-                    "weak_letter_threshold": float(np.clip(base_params["weak_letter_threshold"] + rng.uniform(-10.0, 10.0), 25.0, 90.0)),
-                    "max_target_letters": float(np.clip(base_params["max_target_letters"] + rng.randint(-2, 3), 1, 30)),
-                    "padding_ms": float(np.clip(base_params["padding_ms"] + rng.uniform(-15.0, 25.0), 20.0, 180.0)),
-                    "fade_ms": float(np.clip(base_params["fade_ms"] + rng.uniform(-6.0, 8.0), 6.0, 70.0)),
+                    "strength": float(
+                        np.clip(base_params["strength"] + rng.randint(-20, 20), 1, 100)
+                    ),
+                    "presence_gain": float(
+                        np.clip(
+                            base_params["presence_gain"] + rng.uniform(-0.25, 0.35),
+                            0.10,
+                            2.50,
+                        )
+                    ),
+                    "sibilance_gain": float(
+                        np.clip(
+                            base_params["sibilance_gain"] + rng.uniform(-0.25, 0.35),
+                            0.05,
+                            2.80,
+                        )
+                    ),
+                    "transient_gain": float(
+                        np.clip(
+                            base_params["transient_gain"] + rng.uniform(-0.25, 0.35),
+                            0.05,
+                            2.50,
+                        )
+                    ),
+                    "percussive_gain": float(
+                        np.clip(
+                            base_params["percussive_gain"] + rng.uniform(-0.18, 0.26),
+                            0.00,
+                            2.20,
+                        )
+                    ),
+                    "unsharp_amount": float(
+                        np.clip(
+                            base_params["unsharp_amount"] + rng.uniform(-0.18, 0.24),
+                            0.00,
+                            2.40,
+                        )
+                    ),
+                    "air_amount": float(
+                        np.clip(
+                            base_params["air_amount"] + rng.uniform(-0.10, 0.18),
+                            0.00,
+                            1.80,
+                        )
+                    ),
+                    "detail_mix": float(
+                        np.clip(
+                            base_params["detail_mix"] + rng.uniform(-0.10, 0.18),
+                            0.05,
+                            1.2,
+                        )
+                    ),
+                    "local_blend": float(
+                        np.clip(
+                            base_params["local_blend"] + rng.uniform(-0.12, 0.18),
+                            0.08,
+                            0.95,
+                        )
+                    ),
+                    "freq_smooth_sigma": float(
+                        np.clip(
+                            base_params["freq_smooth_sigma"] + rng.uniform(-0.4, 0.8),
+                            0.2,
+                            4.0,
+                        )
+                    ),
+                    "time_smooth_sigma": float(
+                        np.clip(
+                            base_params["time_smooth_sigma"] + rng.uniform(-0.6, 0.8),
+                            0.4,
+                            6.0,
+                        )
+                    ),
+                    "onset_sigma": float(
+                        np.clip(
+                            base_params["onset_sigma"] + rng.uniform(-0.4, 0.6),
+                            0.2,
+                            4.0,
+                        )
+                    ),
+                    "tail_focus": float(
+                        np.clip(
+                            base_params["tail_focus"] + rng.uniform(-0.3, 0.4), 0.8, 2.6
+                        )
+                    ),
+                    "weak_letter_threshold": float(
+                        np.clip(
+                            base_params["weak_letter_threshold"]
+                            + rng.uniform(-10.0, 10.0),
+                            25.0,
+                            90.0,
+                        )
+                    ),
+                    "max_target_letters": float(
+                        np.clip(
+                            base_params["max_target_letters"] + rng.randint(-2, 3),
+                            1,
+                            30,
+                        )
+                    ),
+                    "padding_ms": float(
+                        np.clip(
+                            base_params["padding_ms"] + rng.uniform(-15.0, 25.0),
+                            20.0,
+                            180.0,
+                        )
+                    ),
+                    "fade_ms": float(
+                        np.clip(
+                            base_params["fade_ms"] + rng.uniform(-6.0, 8.0), 6.0, 70.0
+                        )
+                    ),
                 }
             )
         return variants[:variants_per_batch]
@@ -1518,7 +1832,9 @@ class NeuralClarityRepairEngine:
 
         source_audio, sample_rate = self._load_audio(source_path, sample_rate=44100)
         intended_words = lyrics_to_words(intended_lyrics)
-        baseline_scoring = self.scorer.analyze_audio(source_audio, sample_rate, intended_lyrics)
+        baseline_scoring = self.scorer.analyze_audio(
+            source_audio, sample_rate, intended_lyrics
+        )
         baseline_score = float(baseline_scoring["similarity_score"])
         best_output_path = output_dir / f"{source_path.stem}_best_touchup.wav"
         sf.write(best_output_path, source_audio, sample_rate, subtype="PCM_24")
@@ -1558,9 +1874,13 @@ class NeuralClarityRepairEngine:
         detected_only = not allow_local_repairs and not allow_xtts_regeneration
         repaired_word_indices: set[int] = set()
 
-        def working_state_payload(current_state: Dict[str, object]) -> Dict[str, object]:
+        def working_state_payload(
+            current_state: Dict[str, object],
+        ) -> Dict[str, object]:
             return {
-                "source_audio": np.asarray(current_state["output_audio"], dtype=np.float32).copy(),
+                "source_audio": np.asarray(
+                    current_state["output_audio"], dtype=np.float32
+                ).copy(),
                 "sample_rate": sample_rate,
                 "word_scores": list(current_state["word_scores"]),
                 "letter_scores": list(current_state["letter_scores"]),
@@ -1577,7 +1897,9 @@ class NeuralClarityRepairEngine:
             shutil.copy2(str(candidate["output_path"]), str(best_output_path))
             best_state["output_path"] = best_output_path
             repaired_word_indices.update(
-                int(index) for index in candidate.get("target_word_indices", []) if int(index) >= 0
+                int(index)
+                for index in candidate.get("target_word_indices", [])
+                if int(index) >= 0
             )
             return True
 
@@ -1607,7 +1929,11 @@ class NeuralClarityRepairEngine:
                 }
             )
 
-        weak_summary = ", ".join(intended_words[index] for index in target_word_indices[:8]) if target_word_indices else "none"
+        weak_summary = (
+            ", ".join(intended_words[index] for index in target_word_indices[:8])
+            if target_word_indices
+            else "none"
+        )
         emit_status(
             (
                 f"Detected {len(target_word_indices)} weak word regions. "
@@ -1708,11 +2034,13 @@ class NeuralClarityRepairEngine:
             for group_index, word_group in enumerate(contiguous_groups, start=1):
                 if cancel_event.is_set():
                     break
-                phrase_text = " ".join(intended_words[index] for index in word_group).strip()
+                phrase_text = " ".join(
+                    intended_words[index] for index in word_group
+                ).strip()
                 if not phrase_text:
                     continue
                 emit_status(
-                    f"Regenerating weak region {group_index}/{len(contiguous_groups)}: \"{phrase_text}\".",
+                    f'Regenerating weak region {group_index}/{len(contiguous_groups)}: "{phrase_text}".',
                     progress=min(92, max(40, int(best_state["similarity_score"]))),
                 )
                 candidate_path = candidates_dir / f"regen_{group_index:02d}.wav"
@@ -1724,11 +2052,15 @@ class NeuralClarityRepairEngine:
                         word_indices=word_group,
                         phrase_text=phrase_text,
                         speaker_wav=speaker_reference,
-                        blend=float(np.clip(0.58 + (0.30 * (strength / 100.0)), 0.45, 0.92)),
+                        blend=float(
+                            np.clip(0.58 + (0.30 * (strength / 100.0)), 0.45, 0.92)
+                        ),
                         padding_ms=95.0,
                     )
                     scoring = self._score_audio_for_indices(
-                        full_output=np.asarray(candidate["output_audio"], dtype=np.float32),
+                        full_output=np.asarray(
+                            candidate["output_audio"], dtype=np.float32
+                        ),
                         sample_rate=int(candidate["sample_rate"]),
                         intended_words=intended_words,
                         previous_word_scores=list(best_state["word_scores"]),
@@ -1811,14 +2143,22 @@ class NeuralClarityRepairEngine:
         rendered_dir.mkdir(parents=True, exist_ok=True)
 
         source_audio, sample_rate = self._load_audio(source_path, sample_rate=44100)
-        reference_audio, reference_rate = self._load_audio(reference_path, sample_rate=44100)
+        reference_audio, reference_rate = self._load_audio(
+            reference_path, sample_rate=44100
+        )
         if int(reference_rate) != int(sample_rate):
             raise RuntimeError("Reference patch repair expects matching sample rates.")
 
         intended_words = lyrics_to_words(intended_lyrics)
-        baseline_scoring = self.scorer.analyze_audio(source_audio, sample_rate, intended_lyrics)
-        reference_scoring = self.scorer.analyze_audio(reference_audio, sample_rate, intended_lyrics)
-        best_output_path = output_dir / f"{source_path.stem}_reference_phrase_repaired.wav"
+        baseline_scoring = self.scorer.analyze_audio(
+            source_audio, sample_rate, intended_lyrics
+        )
+        reference_scoring = self.scorer.analyze_audio(
+            reference_audio, sample_rate, intended_lyrics
+        )
+        best_output_path = (
+            output_dir / f"{source_path.stem}_reference_phrase_repaired.wav"
+        )
         sf.write(best_output_path, source_audio, sample_rate, subtype="PCM_24")
 
         best_state: Dict[str, object] = {
@@ -1852,7 +2192,9 @@ class NeuralClarityRepairEngine:
         contiguous_groups = self._group_contiguous_indices(target_word_indices)
         repaired_word_indices: set[int] = set()
         attempts_tested = 0
-        normalized_replacement_strategy = str(replacement_strategy or "blend").strip().lower()
+        normalized_replacement_strategy = (
+            str(replacement_strategy or "blend").strip().lower()
+        )
         if normalized_replacement_strategy not in {"blend", "replace"}:
             normalized_replacement_strategy = "blend"
 
@@ -1887,7 +2229,13 @@ class NeuralClarityRepairEngine:
             ]
             group_similarity = min(group_scores) if group_scores else 60.0
             weakness = 1.0 - (group_similarity / 100.0)
-            blend = float(np.clip(blend_floor + ((blend_ceil - blend_floor) * weakness), blend_floor, blend_ceil))
+            blend = float(
+                np.clip(
+                    blend_floor + ((blend_ceil - blend_floor) * weakness),
+                    blend_floor,
+                    blend_ceil,
+                )
+            )
             mixed_segment = ((1.0 - blend) * source_segment) + (blend * fitted_patch)
 
             fade_size = min(
@@ -1899,20 +2247,22 @@ class NeuralClarityRepairEngine:
             mix_curve[:fade_size] = fade[:fade_size]
             mix_curve[-fade_size:] = fade[-fade_size:]
 
-            candidate_audio = np.asarray(best_state["output_audio"], dtype=np.float32).copy()
+            candidate_audio = np.asarray(
+                best_state["output_audio"], dtype=np.float32
+            ).copy()
             if normalized_replacement_strategy == "replace":
                 candidate_audio[target_start:target_end] = fitted_patch
                 if fade_size > 1:
                     candidate_audio[target_start:target_end] = (
-                        ((1.0 - mix_curve[:, np.newaxis]) * source_segment)
-                        + (mix_curve[:, np.newaxis] * fitted_patch)
-                    )
+                        (1.0 - mix_curve[:, np.newaxis]) * source_segment
+                    ) + (mix_curve[:, np.newaxis] * fitted_patch)
             else:
                 candidate_audio[target_start:target_end] = (
-                    ((1.0 - mix_curve[:, np.newaxis]) * source_segment)
-                    + (mix_curve[:, np.newaxis] * mixed_segment)
-                )
-            peak = float(np.max(np.abs(candidate_audio))) if candidate_audio.size else 0.0
+                    (1.0 - mix_curve[:, np.newaxis]) * source_segment
+                ) + (mix_curve[:, np.newaxis] * mixed_segment)
+            peak = (
+                float(np.max(np.abs(candidate_audio))) if candidate_audio.size else 0.0
+            )
             if peak > 0.995:
                 candidate_audio *= np.float32(0.995 / peak)
 
@@ -1945,8 +2295,12 @@ class NeuralClarityRepairEngine:
                         **(extra_params or {}),
                     },
                 }
-                repaired_word_indices.update(int(index) for index in word_group if int(index) >= 0)
-                sf.write(best_output_path, candidate_audio, sample_rate, subtype="PCM_24")
+                repaired_word_indices.update(
+                    int(index) for index in word_group if int(index) >= 0
+                )
+                sf.write(
+                    best_output_path, candidate_audio, sample_rate, subtype="PCM_24"
+                )
                 return True
             return False
 
@@ -1996,7 +2350,7 @@ class NeuralClarityRepairEngine:
             emit_status(
                 (
                     f"Rendering phrase patch {group_index}/{len(contiguous_groups)}: "
-                    f"\"{phrase_text}\"."
+                    f'"{phrase_text}".'
                 ),
                 progress=min(90, max(18, int(best_state["similarity_score"]))),
             )
@@ -2018,7 +2372,9 @@ class NeuralClarityRepairEngine:
             if target_end <= target_start or reference_end <= reference_start:
                 continue
 
-            reference_segment_path = references_dir / f"reference_group_{group_index:02d}.wav"
+            reference_segment_path = (
+                references_dir / f"reference_group_{group_index:02d}.wav"
+            )
             sf.write(
                 reference_segment_path,
                 reference_audio[reference_start:reference_end],
@@ -2032,11 +2388,21 @@ class NeuralClarityRepairEngine:
                 target_phrase_scores = [
                     {
                         "index": local_index,
-                        "word": intended_words[int(word_index)]
-                        if 0 <= int(word_index) < len(intended_words)
-                        else str(entry.get("word", "")),
-                        "start": max(0.0, float(entry.get("start", 0.0)) - (target_start / float(sample_rate))),
-                        "end": max(0.0, float(entry.get("end", 0.0)) - (target_start / float(sample_rate))),
+                        "word": (
+                            intended_words[int(word_index)]
+                            if 0 <= int(word_index) < len(intended_words)
+                            else str(entry.get("word", ""))
+                        ),
+                        "start": max(
+                            0.0,
+                            float(entry.get("start", 0.0))
+                            - (target_start / float(sample_rate)),
+                        ),
+                        "end": max(
+                            0.0,
+                            float(entry.get("end", 0.0))
+                            - (target_start / float(sample_rate)),
+                        ),
                         "similarity": float(entry.get("similarity", 0.0)),
                     }
                     for local_index, (word_index, entry) in enumerate(
@@ -2051,11 +2417,21 @@ class NeuralClarityRepairEngine:
                 reference_phrase_scores = [
                     {
                         "index": local_index,
-                        "word": intended_words[int(word_index)]
-                        if 0 <= int(word_index) < len(intended_words)
-                        else str(entry.get("word", "")),
-                        "start": max(0.0, float(entry.get("start", 0.0)) - (reference_start / float(sample_rate))),
-                        "end": max(0.0, float(entry.get("end", 0.0)) - (reference_start / float(sample_rate))),
+                        "word": (
+                            intended_words[int(word_index)]
+                            if 0 <= int(word_index) < len(intended_words)
+                            else str(entry.get("word", ""))
+                        ),
+                        "start": max(
+                            0.0,
+                            float(entry.get("start", 0.0))
+                            - (reference_start / float(sample_rate)),
+                        ),
+                        "end": max(
+                            0.0,
+                            float(entry.get("end", 0.0))
+                            - (reference_start / float(sample_rate)),
+                        ),
                         "similarity": float(entry.get("similarity", 0.0)),
                     }
                     for local_index, (word_index, entry) in enumerate(
@@ -2123,7 +2499,9 @@ class NeuralClarityRepairEngine:
                         continue
                     attempts_tested += 1
                     try:
-                        bank_audio, _ = self._load_audio(bank_file, sample_rate=sample_rate)
+                        bank_audio, _ = self._load_audio(
+                            bank_file, sample_rate=sample_rate
+                        )
                     except Exception:
                         continue
                     try_candidate_patch(
@@ -2141,8 +2519,12 @@ class NeuralClarityRepairEngine:
                             ),
                             "reference_path": str(bank_file),
                         },
-                        blend_floor=0.18 if str(bank_entry.get("kind", "")) == "word" else 0.24,
-                        blend_ceil=0.42 if str(bank_entry.get("kind", "")) == "word" else 0.58,
+                        blend_floor=(
+                            0.18 if str(bank_entry.get("kind", "")) == "word" else 0.24
+                        ),
+                        blend_ceil=(
+                            0.42 if str(bank_entry.get("kind", "")) == "word" else 0.58
+                        ),
                     )
 
             emit_status(

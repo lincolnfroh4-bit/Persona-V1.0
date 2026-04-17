@@ -21,7 +21,6 @@ from torch.utils.data import DataLoader, Dataset
 
 from simple_touchup import lyrics_to_words, normalize_lyrics
 
-
 SAMPLE_RATE = 44100
 HOP_LENGTH = 512
 N_FFT = 2048
@@ -182,7 +181,9 @@ def _align_1d(feature: np.ndarray, target_frames: int) -> np.ndarray:
         return np.zeros(target_frames, dtype=np.float32)
     if working.size > target_frames:
         return working[:target_frames].astype(np.float32, copy=False)
-    return np.pad(working, (0, target_frames - working.size)).astype(np.float32, copy=False)
+    return np.pad(working, (0, target_frames - working.size)).astype(
+        np.float32, copy=False
+    )
 
 
 def _align_2d(feature: np.ndarray, target_frames: int) -> np.ndarray:
@@ -201,7 +202,9 @@ def _align_2d(feature: np.ndarray, target_frames: int) -> np.ndarray:
     source_positions = np.linspace(0.0, 1.0, num=working.shape[0], dtype=np.float32)
     target_positions = np.linspace(0.0, 1.0, num=target_frames, dtype=np.float32)
     channels = [
-        np.interp(target_positions, source_positions, working[:, channel]).astype(np.float32)
+        np.interp(target_positions, source_positions, working[:, channel]).astype(
+            np.float32
+        )
         for channel in range(working.shape[1])
     ]
     return np.stack(channels, axis=1)
@@ -212,7 +215,9 @@ def _default_frame_map(source_frames: int, target_frames: int) -> np.ndarray:
         return np.zeros(0, dtype=np.float32)
     if source_frames <= 1:
         return np.zeros(target_frames, dtype=np.float32)
-    return np.linspace(0.0, float(source_frames - 1), num=target_frames, dtype=np.float32)
+    return np.linspace(
+        0.0, float(source_frames - 1), num=target_frames, dtype=np.float32
+    )
 
 
 def _warp_1d_by_frame_map(feature: np.ndarray, frame_map: np.ndarray) -> np.ndarray:
@@ -225,7 +230,9 @@ def _warp_1d_by_frame_map(feature: np.ndarray, frame_map: np.ndarray) -> np.ndar
     if working.size == 1:
         return np.repeat(working.astype(np.float32, copy=False), target_frames)
     source_positions = np.arange(working.size, dtype=np.float32)
-    clipped_map = np.clip(np.asarray(frame_map, dtype=np.float32), 0.0, float(max(working.size - 1, 0)))
+    clipped_map = np.clip(
+        np.asarray(frame_map, dtype=np.float32), 0.0, float(max(working.size - 1, 0))
+    )
     return np.interp(clipped_map, source_positions, working).astype(np.float32)
 
 
@@ -240,7 +247,11 @@ def _warp_2d_by_frame_map(feature: np.ndarray, frame_map: np.ndarray) -> np.ndar
         return np.zeros((target_frames, working.shape[1]), dtype=np.float32)
     if working.shape[0] == 1:
         return np.repeat(working.astype(np.float32, copy=False), target_frames, axis=0)
-    clipped_map = np.clip(np.asarray(frame_map, dtype=np.float32), 0.0, float(max(working.shape[0] - 1, 0)))
+    clipped_map = np.clip(
+        np.asarray(frame_map, dtype=np.float32),
+        0.0,
+        float(max(working.shape[0] - 1, 0)),
+    )
     source_positions = np.arange(working.shape[0], dtype=np.float32)
     channels = [
         np.interp(clipped_map, source_positions, working[:, channel]).astype(np.float32)
@@ -249,7 +260,9 @@ def _warp_2d_by_frame_map(feature: np.ndarray, frame_map: np.ndarray) -> np.ndar
     return np.stack(channels, axis=1)
 
 
-def _invert_monotonic_frame_map(frame_map: np.ndarray, source_frames: int) -> np.ndarray:
+def _invert_monotonic_frame_map(
+    frame_map: np.ndarray, source_frames: int
+) -> np.ndarray:
     if source_frames <= 0:
         return np.zeros(0, dtype=np.float32)
     target_frames = int(np.asarray(frame_map).shape[0])
@@ -259,7 +272,9 @@ def _invert_monotonic_frame_map(frame_map: np.ndarray, source_frames: int) -> np
     source_positions = np.clip(source_positions, 0.0, float(max(source_frames - 1, 0)))
     if source_positions.size == 1:
         return np.repeat(np.float32(0.0), source_frames).astype(np.float32, copy=False)
-    source_positions = source_positions + np.linspace(0.0, 1e-4, num=source_positions.size, dtype=np.float32)
+    source_positions = source_positions + np.linspace(
+        0.0, 1e-4, num=source_positions.size, dtype=np.float32
+    )
     target_positions = np.arange(target_frames, dtype=np.float32)
     desired_sources = np.arange(source_frames, dtype=np.float32)
     return np.interp(
@@ -287,16 +302,27 @@ def _warp_audio_by_frame_map(
         return np.repeat(working.astype(np.float32, copy=False), target_sample_count)
     target_frame_positions = np.arange(len(frame_map), dtype=np.float32)
     if target_frame_positions.size <= 1:
-        return np.resize(working.astype(np.float32, copy=False), target_sample_count).astype(np.float32, copy=False)
-    target_sample_positions = np.linspace(0.0, float(max(len(frame_map) - 1, 0)), num=target_sample_count, dtype=np.float32)
+        return np.resize(
+            working.astype(np.float32, copy=False), target_sample_count
+        ).astype(np.float32, copy=False)
+    target_sample_positions = np.linspace(
+        0.0,
+        float(max(len(frame_map) - 1, 0)),
+        num=target_sample_count,
+        dtype=np.float32,
+    )
     guide_frame_positions = np.interp(
         target_sample_positions,
         target_frame_positions,
         np.asarray(frame_map, dtype=np.float32),
     )
-    guide_sample_positions = np.clip(guide_frame_positions * float(HOP_LENGTH), 0.0, float(max(working.size - 1, 0)))
+    guide_sample_positions = np.clip(
+        guide_frame_positions * float(HOP_LENGTH), 0.0, float(max(working.size - 1, 0))
+    )
     source_positions = np.arange(working.size, dtype=np.float32)
-    return np.interp(guide_sample_positions, source_positions, working).astype(np.float32)
+    return np.interp(guide_sample_positions, source_positions, working).astype(
+        np.float32
+    )
 
 
 def _normalize_similarity_score(score: object) -> float:
@@ -315,15 +341,21 @@ def _safe_std(value: np.ndarray | float, floor: float = 1e-4) -> np.ndarray | fl
     return max(float(value), floor)
 
 
-def _ensure_voice_signature_dim(signature: np.ndarray | Sequence[float] | None) -> np.ndarray:
-    working = np.asarray(signature if signature is not None else [], dtype=np.float32).reshape(-1)
+def _ensure_voice_signature_dim(
+    signature: np.ndarray | Sequence[float] | None,
+) -> np.ndarray:
+    working = np.asarray(
+        signature if signature is not None else [], dtype=np.float32
+    ).reshape(-1)
     if working.size == VOICE_SIGNATURE_DIM:
         return working.astype(np.float32, copy=False)
     if working.size <= 0:
         return np.zeros(VOICE_SIGNATURE_DIM, dtype=np.float32)
     if working.size > VOICE_SIGNATURE_DIM:
         return working[:VOICE_SIGNATURE_DIM].astype(np.float32, copy=False)
-    return np.pad(working.astype(np.float32, copy=False), (0, VOICE_SIGNATURE_DIM - working.size))
+    return np.pad(
+        working.astype(np.float32, copy=False), (0, VOICE_SIGNATURE_DIM - working.size)
+    )
 
 
 def _compute_voice_signature_np(
@@ -337,13 +369,17 @@ def _compute_voice_signature_np(
         return np.zeros(VOICE_SIGNATURE_DIM, dtype=np.float32)
     if mel.shape[1] != N_MELS:
         mel = _align_2d(mel, int(mel.shape[0]))
-        mel = np.pad(mel, ((0, 0), (0, max(0, N_MELS - mel.shape[1]))), mode="edge")[:, :N_MELS]
+        mel = np.pad(mel, ((0, 0), (0, max(0, N_MELS - mel.shape[1]))), mode="edge")[
+            :, :N_MELS
+        ]
     pooled = mel.reshape(mel.shape[0], VOICE_SIGNATURE_BANDS, -1).mean(axis=2)
     mean = pooled.mean(axis=0)
     std = pooled.std(axis=0)
     delta = np.zeros_like(mean, dtype=np.float32)
     if pooled.shape[0] > 1:
-        delta = np.mean(np.abs(np.diff(pooled, axis=0)), axis=0).astype(np.float32, copy=False)
+        delta = np.mean(np.abs(np.diff(pooled, axis=0)), axis=0).astype(
+            np.float32, copy=False
+        )
     voiced = np.asarray(vuv, dtype=np.float32).reshape(-1) > 0.5
     log_f0_values = np.asarray(log_f0, dtype=np.float32).reshape(-1)
     voiced_values = log_f0_values[voiced]
@@ -357,7 +393,9 @@ def _compute_voice_signature_np(
             mean.astype(np.float32, copy=False),
             std.astype(np.float32, copy=False),
             delta.astype(np.float32, copy=False),
-            np.asarray([voiced_ratio, f0_mean, f0_std, mel_level, brightness], dtype=np.float32),
+            np.asarray(
+                [voiced_ratio, f0_mean, f0_std, mel_level, brightness], dtype=np.float32
+            ),
         ]
     )
     return _ensure_voice_signature_dim(signature)
@@ -374,7 +412,8 @@ def _compute_voice_signature_torch(
     if mel_bins != N_MELS:
         raise ValueError(f"Voice signature expects {N_MELS} mel bins, got {mel_bins}.")
     time_mask = (
-        torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1)
+        torch.arange(max_frames, device=lengths.device).unsqueeze(0)
+        < lengths.unsqueeze(1)
     ).to(dtype=mel.dtype)
     pooled = mel.reshape(batch_size, max_frames, VOICE_SIGNATURE_BANDS, -1).mean(dim=-1)
     time_mask_expanded = time_mask.unsqueeze(-1)
@@ -393,13 +432,22 @@ def _compute_voice_signature_torch(
 
     voiced = torch.clamp(vuv, 0.0, 1.0) * time_mask
     voiced_counts = voiced.sum(dim=1).clamp_min(1.0)
-    voiced_ratio = (voiced.sum(dim=1) / time_mask.sum(dim=1).clamp_min(1.0)).unsqueeze(-1)
+    voiced_ratio = (voiced.sum(dim=1) / time_mask.sum(dim=1).clamp_min(1.0)).unsqueeze(
+        -1
+    )
     f0_mean = ((log_f0 * voiced).sum(dim=1) / voiced_counts).unsqueeze(-1)
     f0_centered = (log_f0 - f0_mean.squeeze(-1).unsqueeze(-1)) * voiced
-    f0_std = torch.sqrt((f0_centered.square().sum(dim=1) / voiced_counts).clamp_min(1e-6)).unsqueeze(-1)
+    f0_std = torch.sqrt(
+        (f0_centered.square().sum(dim=1) / voiced_counts).clamp_min(1e-6)
+    ).unsqueeze(-1)
     mel_level = mean.mean(dim=-1, keepdim=True)
-    brightness = (mean[:, -4:].mean(dim=-1, keepdim=True) - mean[:, :4].mean(dim=-1, keepdim=True))
-    return torch.cat([mean, std, delta_mean, voiced_ratio, f0_mean, f0_std, mel_level, brightness], dim=-1)
+    brightness = mean[:, -4:].mean(dim=-1, keepdim=True) - mean[:, :4].mean(
+        dim=-1, keepdim=True
+    )
+    return torch.cat(
+        [mean, std, delta_mean, voiced_ratio, f0_mean, f0_std, mel_level, brightness],
+        dim=-1,
+    )
 
 
 def _render_log_mel_to_audio(log_mel: np.ndarray) -> np.ndarray:
@@ -438,12 +486,18 @@ def _slice_audio_for_frame_range(
     sliced = working[start_sample:end_sample].astype(np.float32, copy=False)
     if sliced.size >= target_samples:
         return sliced[:target_samples].astype(np.float32, copy=False)
-    return np.pad(sliced, (0, target_samples - sliced.size)).astype(np.float32, copy=False)
+    return np.pad(sliced, (0, target_samples - sliced.size)).astype(
+        np.float32, copy=False
+    )
 
 
-def _mask_audio_by_lengths(audio: torch.Tensor, sample_lengths: torch.Tensor) -> torch.Tensor:
+def _mask_audio_by_lengths(
+    audio: torch.Tensor, sample_lengths: torch.Tensor
+) -> torch.Tensor:
     max_samples = int(audio.shape[1])
-    valid = torch.arange(max_samples, device=sample_lengths.device).unsqueeze(0) < sample_lengths.unsqueeze(1)
+    valid = torch.arange(max_samples, device=sample_lengths.device).unsqueeze(
+        0
+    ) < sample_lengths.unsqueeze(1)
     return audio * valid.to(dtype=audio.dtype)
 
 
@@ -500,8 +554,12 @@ class GuidedSVSDataset(Dataset):
         self.features_dir = self.dataset_dir / "features"
         self.max_frames = max(120, int(max_frames))
         self.random_crop = bool(random_crop)
-        self.mel_mean = np.asarray(stats.get("mel_mean", [0.0] * N_MELS), dtype=np.float32)
-        self.mel_std = np.asarray(stats.get("mel_std", [1.0] * N_MELS), dtype=np.float32)
+        self.mel_mean = np.asarray(
+            stats.get("mel_mean", [0.0] * N_MELS), dtype=np.float32
+        )
+        self.mel_std = np.asarray(
+            stats.get("mel_std", [1.0] * N_MELS), dtype=np.float32
+        )
         self.log_f0_mean = float(stats.get("log_f0_mean", 0.0))
         self.log_f0_std = float(_safe_std(float(stats.get("log_f0_std", 1.0))))
         self.energy_mean = float(stats.get("energy_mean", 0.0))
@@ -583,11 +641,13 @@ class GuidedSVSDataset(Dataset):
         norm_target_log_f0 = np.zeros_like(target_log_f0, dtype=np.float32)
         if np.any(target_voiced):
             norm_target_log_f0[target_voiced] = (
-                (target_log_f0[target_voiced] - self.log_f0_mean) / self.log_f0_std
-            )
+                target_log_f0[target_voiced] - self.log_f0_mean
+            ) / self.log_f0_std
         norm_energy = (energy - self.energy_mean) / self.energy_std
         norm_mel = (mel - self.mel_mean[np.newaxis, :]) / self.mel_std[np.newaxis, :]
-        norm_guide_mel = (guide_mel - self.mel_mean[np.newaxis, :]) / self.mel_std[np.newaxis, :]
+        norm_guide_mel = (guide_mel - self.mel_mean[np.newaxis, :]) / self.mel_std[
+            np.newaxis, :
+        ]
         target_voice_signature = _compute_voice_signature_np(
             log_mel=norm_mel,
             log_f0=norm_target_log_f0,
@@ -596,37 +656,65 @@ class GuidedSVSDataset(Dataset):
 
         return {
             "mel": torch.from_numpy(norm_mel.astype(np.float32, copy=False)),
-            "guide_mel": torch.from_numpy(norm_guide_mel.astype(np.float32, copy=False)),
+            "guide_mel": torch.from_numpy(
+                norm_guide_mel.astype(np.float32, copy=False)
+            ),
             "phone_ids": torch.from_numpy(phone_ids.astype(np.int64, copy=False)),
             "log_f0": torch.from_numpy(norm_log_f0.astype(np.float32, copy=False)),
-            "target_log_f0": torch.from_numpy(norm_target_log_f0.astype(np.float32, copy=False)),
+            "target_log_f0": torch.from_numpy(
+                norm_target_log_f0.astype(np.float32, copy=False)
+            ),
             "target_vuv": torch.from_numpy(target_vuv.astype(np.float32, copy=False)),
             "vuv": torch.from_numpy(vuv.astype(np.float32, copy=False)),
             "energy": torch.from_numpy(norm_energy.astype(np.float32, copy=False)),
             "lyric_mask": torch.from_numpy(lyric_mask.astype(np.float32, copy=False)),
-            "voice_prototype": torch.from_numpy(self.global_voice_signature.astype(np.float32, copy=False)),
-            "target_voice_signature": torch.from_numpy(target_voice_signature.astype(np.float32, copy=False)),
+            "voice_prototype": torch.from_numpy(
+                self.global_voice_signature.astype(np.float32, copy=False)
+            ),
+            "target_voice_signature": torch.from_numpy(
+                target_voice_signature.astype(np.float32, copy=False)
+            ),
             "length": int(norm_mel.shape[0]),
         }
 
 
-def collate_guided_svs(batch: Sequence[Dict[str, torch.Tensor | int]]) -> Dict[str, torch.Tensor]:
+def collate_guided_svs(
+    batch: Sequence[Dict[str, torch.Tensor | int]],
+) -> Dict[str, torch.Tensor]:
     lengths = torch.tensor([int(item["length"]) for item in batch], dtype=torch.long)
-    mel = pad_sequence([item["mel"] for item in batch], batch_first=True, padding_value=0.0)
-    guide_mel = pad_sequence([item["guide_mel"] for item in batch], batch_first=True, padding_value=0.0)
+    mel = pad_sequence(
+        [item["mel"] for item in batch], batch_first=True, padding_value=0.0
+    )
+    guide_mel = pad_sequence(
+        [item["guide_mel"] for item in batch], batch_first=True, padding_value=0.0
+    )
     phone_ids = pad_sequence(
         [item["phone_ids"] for item in batch],
         batch_first=True,
         padding_value=PHONE_TO_ID["PAD"],
     )
-    log_f0 = pad_sequence([item["log_f0"] for item in batch], batch_first=True, padding_value=0.0)
-    target_log_f0 = pad_sequence([item["target_log_f0"] for item in batch], batch_first=True, padding_value=0.0)
-    target_vuv = pad_sequence([item["target_vuv"] for item in batch], batch_first=True, padding_value=0.0)
-    vuv = pad_sequence([item["vuv"] for item in batch], batch_first=True, padding_value=0.0)
-    energy = pad_sequence([item["energy"] for item in batch], batch_first=True, padding_value=0.0)
-    lyric_mask = pad_sequence([item["lyric_mask"] for item in batch], batch_first=True, padding_value=0.0)
+    log_f0 = pad_sequence(
+        [item["log_f0"] for item in batch], batch_first=True, padding_value=0.0
+    )
+    target_log_f0 = pad_sequence(
+        [item["target_log_f0"] for item in batch], batch_first=True, padding_value=0.0
+    )
+    target_vuv = pad_sequence(
+        [item["target_vuv"] for item in batch], batch_first=True, padding_value=0.0
+    )
+    vuv = pad_sequence(
+        [item["vuv"] for item in batch], batch_first=True, padding_value=0.0
+    )
+    energy = pad_sequence(
+        [item["energy"] for item in batch], batch_first=True, padding_value=0.0
+    )
+    lyric_mask = pad_sequence(
+        [item["lyric_mask"] for item in batch], batch_first=True, padding_value=0.0
+    )
     voice_prototype = torch.stack([item["voice_prototype"] for item in batch], dim=0)
-    target_voice_signature = torch.stack([item["target_voice_signature"] for item in batch], dim=0)
+    target_voice_signature = torch.stack(
+        [item["target_voice_signature"] for item in batch], dim=0
+    )
     return {
         "mel": mel,
         "guide_mel": guide_mel,
@@ -658,8 +746,12 @@ class VocoderSliceDataset(Dataset):
         self.features_dir = self.dataset_dir / "features"
         self.max_frames = max(64, int(max_frames))
         self.random_crop = bool(random_crop)
-        self.mel_mean = np.asarray(stats.get("mel_mean", [0.0] * N_MELS), dtype=np.float32)
-        self.mel_std = np.asarray(stats.get("mel_std", [1.0] * N_MELS), dtype=np.float32)
+        self.mel_mean = np.asarray(
+            stats.get("mel_mean", [0.0] * N_MELS), dtype=np.float32
+        )
+        self.mel_std = np.asarray(
+            stats.get("mel_std", [1.0] * N_MELS), dtype=np.float32
+        )
 
     def __len__(self) -> int:
         return len(self.entries)
@@ -671,7 +763,9 @@ class VocoderSliceDataset(Dataset):
         mel = np.load(feature_dir / "mel.npy").astype(np.float32)
         audio_path = feature_dir / "target_audio.npy"
         if not audio_path.exists():
-            raise RuntimeError(f"Vocoder slice {sample_id} is missing target_audio.npy.")
+            raise RuntimeError(
+                f"Vocoder slice {sample_id} is missing target_audio.npy."
+            )
         audio = np.load(audio_path).astype(np.float32).reshape(-1)
         total_frames = int(mel.shape[0])
         start = 0
@@ -683,10 +777,14 @@ class VocoderSliceDataset(Dataset):
         mel = mel[start:end].astype(np.float32, copy=False)
         sample_start = start * HOP_LENGTH
         sample_end = sample_start + (mel.shape[0] * HOP_LENGTH)
-        audio = audio[sample_start:min(sample_end, audio.shape[0])].astype(np.float32, copy=False)
+        audio = audio[sample_start : min(sample_end, audio.shape[0])].astype(
+            np.float32, copy=False
+        )
         expected_samples = max(1, mel.shape[0] * HOP_LENGTH)
         if audio.shape[0] < expected_samples:
-            audio = np.pad(audio, (0, expected_samples - audio.shape[0])).astype(np.float32, copy=False)
+            audio = np.pad(audio, (0, expected_samples - audio.shape[0])).astype(
+                np.float32, copy=False
+            )
         elif audio.shape[0] > expected_samples:
             audio = audio[:expected_samples].astype(np.float32, copy=False)
         norm_mel = (mel - self.mel_mean[np.newaxis, :]) / self.mel_std[np.newaxis, :]
@@ -698,11 +796,21 @@ class VocoderSliceDataset(Dataset):
         }
 
 
-def collate_vocoder_slices(batch: Sequence[Dict[str, torch.Tensor | int]]) -> Dict[str, torch.Tensor]:
-    mel_lengths = torch.tensor([int(item["mel_length"]) for item in batch], dtype=torch.long)
-    sample_lengths = torch.tensor([int(item["sample_length"]) for item in batch], dtype=torch.long)
-    mel = pad_sequence([item["mel"] for item in batch], batch_first=True, padding_value=0.0)
-    audio = pad_sequence([item["audio"] for item in batch], batch_first=True, padding_value=0.0)
+def collate_vocoder_slices(
+    batch: Sequence[Dict[str, torch.Tensor | int]],
+) -> Dict[str, torch.Tensor]:
+    mel_lengths = torch.tensor(
+        [int(item["mel_length"]) for item in batch], dtype=torch.long
+    )
+    sample_lengths = torch.tensor(
+        [int(item["sample_length"]) for item in batch], dtype=torch.long
+    )
+    mel = pad_sequence(
+        [item["mel"] for item in batch], batch_first=True, padding_value=0.0
+    )
+    audio = pad_sequence(
+        [item["audio"] for item in batch], batch_first=True, padding_value=0.0
+    )
     return {
         "mel": mel,
         "audio": audio,
@@ -719,7 +827,10 @@ class PositionalEncoding(nn.Module):
 
     def _build_encoding(self, max_len: int) -> torch.Tensor:
         position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, self.d_model, 2) * (-math.log(10000.0) / max(self.d_model, 2)))
+        div_term = torch.exp(
+            torch.arange(0, self.d_model, 2)
+            * (-math.log(10000.0) / max(self.d_model, 2))
+        )
         pe = torch.zeros(max_len, self.d_model)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
@@ -751,9 +862,15 @@ class FrameConditionedMelRegenerator(nn.Module):
     ):
         super().__init__()
         self.phone_emb = nn.Embedding(vocab_size, d_model)
-        self.f0_proj = nn.Sequential(nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model))
-        self.energy_proj = nn.Sequential(nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model))
-        self.vuv_proj = nn.Sequential(nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model))
+        self.f0_proj = nn.Sequential(
+            nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model)
+        )
+        self.energy_proj = nn.Sequential(
+            nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model)
+        )
+        self.vuv_proj = nn.Sequential(
+            nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model)
+        )
         self.voice_style_proj = nn.Sequential(
             nn.Linear(voice_signature_dim, d_model),
             nn.SiLU(),
@@ -820,9 +937,9 @@ class FrameConditionedMelRegenerator(nn.Module):
         x = x + self.voice_style_proj(voice_prototype.to(dtype=x.dtype)).unsqueeze(1)
         x = self.positional(x)
         max_frames = int(phone_ids.shape[1])
-        key_padding_mask = (
-            torch.arange(max_frames, device=lengths.device).unsqueeze(0) >= lengths.unsqueeze(1)
-        )
+        key_padding_mask = torch.arange(max_frames, device=lengths.device).unsqueeze(
+            0
+        ) >= lengths.unsqueeze(1)
         x = self.encoder(x, src_key_padding_mask=key_padding_mask)
         mel = self.output_proj(x)
         if return_aux:
@@ -849,9 +966,15 @@ class GuideConditionedMelRegenerator(nn.Module):
     ):
         super().__init__()
         self.phone_emb = nn.Embedding(vocab_size, d_model)
-        self.f0_proj = nn.Sequential(nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model))
-        self.energy_proj = nn.Sequential(nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model))
-        self.vuv_proj = nn.Sequential(nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model))
+        self.f0_proj = nn.Sequential(
+            nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model)
+        )
+        self.energy_proj = nn.Sequential(
+            nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model)
+        )
+        self.vuv_proj = nn.Sequential(
+            nn.Linear(1, d_model), nn.SiLU(), nn.Linear(d_model, d_model)
+        )
         self.guide_mel_proj = nn.Sequential(
             nn.Linear(n_mels, d_model),
             nn.GELU(),
@@ -922,8 +1045,10 @@ class GuideConditionedMelRegenerator(nn.Module):
         content = content + self.energy_proj(energy.unsqueeze(-1))
         if lyric_mask is None:
             lyric_gate = (
-                (phone_ids != PHONE_TO_ID["SP"]) & (phone_ids != PHONE_TO_ID["PAD"])
-            ).to(dtype=guide_mel.dtype).unsqueeze(-1)
+                ((phone_ids != PHONE_TO_ID["SP"]) & (phone_ids != PHONE_TO_ID["PAD"]))
+                .to(dtype=guide_mel.dtype)
+                .unsqueeze(-1)
+            )
         else:
             lyric_gate = lyric_mask.to(dtype=guide_mel.dtype).unsqueeze(-1)
         gated_guide_mel = guide_mel * (0.08 + (0.92 * lyric_gate))
@@ -939,9 +1064,9 @@ class GuideConditionedMelRegenerator(nn.Module):
         x = x + self.voice_style_proj(voice_prototype.to(dtype=x.dtype)).unsqueeze(1)
         x = self.positional(x)
         max_frames = int(phone_ids.shape[1])
-        key_padding_mask = (
-            torch.arange(max_frames, device=lengths.device).unsqueeze(0) >= lengths.unsqueeze(1)
-        )
+        key_padding_mask = torch.arange(max_frames, device=lengths.device).unsqueeze(
+            0
+        ) >= lengths.unsqueeze(1)
         x = self.encoder(x, src_key_padding_mask=key_padding_mask)
         mel = self.output_proj(x)
         if return_aux:
@@ -960,7 +1085,9 @@ class VocoderResidualBlock(nn.Module):
         padding = dilation * 3
         self.block = nn.Sequential(
             nn.LeakyReLU(0.1),
-            nn.Conv1d(channels, channels, kernel_size=7, padding=padding, dilation=dilation),
+            nn.Conv1d(
+                channels, channels, kernel_size=7, padding=padding, dilation=dilation
+            ),
             nn.LeakyReLU(0.1),
             nn.Conv1d(channels, channels, kernel_size=1),
         )
@@ -1031,17 +1158,60 @@ class PersonaNeuralVocoder(nn.Module):
 class WavePatchDiscriminator(nn.Module):
     def __init__(self, channels: int = 32):
         super().__init__()
-        channel_plan = [1, channels, channels * 2, channels * 4, channels * 8, channels * 8]
+        channel_plan = [
+            1,
+            channels,
+            channels * 2,
+            channels * 4,
+            channels * 8,
+            channels * 8,
+        ]
         self.layers = nn.ModuleList(
             [
-                nn.Conv1d(channel_plan[0], channel_plan[1], kernel_size=15, stride=1, padding=7),
-                nn.Conv1d(channel_plan[1], channel_plan[2], kernel_size=41, stride=2, padding=20, groups=4),
-                nn.Conv1d(channel_plan[2], channel_plan[3], kernel_size=41, stride=2, padding=20, groups=8),
-                nn.Conv1d(channel_plan[3], channel_plan[4], kernel_size=41, stride=4, padding=20, groups=16),
-                nn.Conv1d(channel_plan[4], channel_plan[5], kernel_size=41, stride=4, padding=20, groups=16),
+                nn.Conv1d(
+                    channel_plan[0],
+                    channel_plan[1],
+                    kernel_size=15,
+                    stride=1,
+                    padding=7,
+                ),
+                nn.Conv1d(
+                    channel_plan[1],
+                    channel_plan[2],
+                    kernel_size=41,
+                    stride=2,
+                    padding=20,
+                    groups=4,
+                ),
+                nn.Conv1d(
+                    channel_plan[2],
+                    channel_plan[3],
+                    kernel_size=41,
+                    stride=2,
+                    padding=20,
+                    groups=8,
+                ),
+                nn.Conv1d(
+                    channel_plan[3],
+                    channel_plan[4],
+                    kernel_size=41,
+                    stride=4,
+                    padding=20,
+                    groups=16,
+                ),
+                nn.Conv1d(
+                    channel_plan[4],
+                    channel_plan[5],
+                    kernel_size=41,
+                    stride=4,
+                    padding=20,
+                    groups=16,
+                ),
             ]
         )
-        self.output_proj = nn.Conv1d(channel_plan[-1], 1, kernel_size=5, stride=1, padding=2)
+        self.output_proj = nn.Conv1d(
+            channel_plan[-1], 1, kernel_size=5, stride=1, padding=2
+        )
 
     def forward(self, audio: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         x = audio.unsqueeze(1)
@@ -1065,7 +1235,9 @@ class MultiScaleWaveDiscriminator(nn.Module):
         )
         self.pool = nn.AvgPool1d(kernel_size=4, stride=2, padding=1)
 
-    def forward(self, audio: torch.Tensor) -> List[Tuple[torch.Tensor, List[torch.Tensor]]]:
+    def forward(
+        self, audio: torch.Tensor
+    ) -> List[Tuple[torch.Tensor, List[torch.Tensor]]]:
         outputs: List[Tuple[torch.Tensor, List[torch.Tensor]]] = []
         working = audio
         for index, discriminator in enumerate(self.discriminators):
@@ -1156,7 +1328,10 @@ class GuidedSVSManager:
             return uniform_scores
 
         starts = [float(entry.get("start", 0.0)) for entry in usable]
-        ends = [max(float(entry.get("end", 0.0)), float(entry.get("start", 0.0)) + 1e-3) for entry in usable]
+        ends = [
+            max(float(entry.get("end", 0.0)), float(entry.get("start", 0.0)) + 1e-3)
+            for entry in usable
+        ]
         offset = min(starts) if starts else 0.0
         total_duration = max(float(duration_seconds), 0.05)
         normalized: List[Dict[str, object]] = []
@@ -1165,7 +1340,10 @@ class GuidedSVSManager:
         previous_end = 0.0
         for word_index, word in enumerate(words):
             raw_start = max(0.0, float(usable[word_index].get("start", 0.0)) - offset)
-            raw_end = max(raw_start + 0.01, float(usable[word_index].get("end", raw_start + 0.01)) - offset)
+            raw_end = max(
+                raw_start + 0.01,
+                float(usable[word_index].get("end", raw_start + 0.01)) - offset,
+            )
             if raw_start + 1e-4 < previous_end:
                 monotonic_score -= 1.0 / float(max(len(words), 1))
             if raw_end > raw_start + 0.015:
@@ -1182,23 +1360,33 @@ class GuidedSVSManager:
         if any(float(entry["end"]) <= float(entry["start"]) for entry in normalized):
             return uniform_scores
 
-        last_end = max(float(entry["end"]) for entry in normalized) if normalized else 0.0
+        last_end = (
+            max(float(entry["end"]) for entry in normalized) if normalized else 0.0
+        )
         coverage_ratio = float(np.clip(last_end / total_duration, 0.0, 1.0))
         monotonic_score = float(np.clip(monotonic_score, 0.0, 1.0))
-        duration_score = float(np.clip(positive_duration_score / float(max(len(words), 1)), 0.0, 1.0))
-        timing_reliability = float(np.clip((0.45 * monotonic_score) + (0.35 * duration_score) + (0.20 * coverage_ratio), 0.0, 1.0))
+        duration_score = float(
+            np.clip(positive_duration_score / float(max(len(words), 1)), 0.0, 1.0)
+        )
+        timing_reliability = float(
+            np.clip(
+                (0.45 * monotonic_score)
+                + (0.35 * duration_score)
+                + (0.20 * coverage_ratio),
+                0.0,
+                1.0,
+            )
+        )
         if prefer_content_alignment:
             timing_reliability *= 0.2
 
         blended: List[Dict[str, object]] = []
         for raw_entry, uniform_entry in zip(normalized, uniform_scores):
-            start = (
-                (timing_reliability * float(raw_entry["start"]))
-                + ((1.0 - timing_reliability) * float(uniform_entry["start"]))
+            start = (timing_reliability * float(raw_entry["start"])) + (
+                (1.0 - timing_reliability) * float(uniform_entry["start"])
             )
-            end = (
-                (timing_reliability * float(raw_entry["end"]))
-                + ((1.0 - timing_reliability) * float(uniform_entry["end"]))
+            end = (timing_reliability * float(raw_entry["end"])) + (
+                (1.0 - timing_reliability) * float(uniform_entry["end"])
             )
             end = max(start + 0.01, end)
             blended.append(
@@ -1219,18 +1407,27 @@ class GuidedSVSManager:
         training_report_path: Path | None = None,
     ) -> Path:
         manifest = self._load_json_if_exists(manifest_path)
-        manifest_training_report = Path(str(manifest.get("training_report_path", "") or "")).expanduser()
+        manifest_training_report = Path(
+            str(manifest.get("training_report_path", "") or "")
+        ).expanduser()
         if training_report_path is None and manifest_training_report.exists():
             training_report_path = manifest_training_report
 
         candidates: List[Path] = []
-        manifest_stats = str(manifest.get("guided_regeneration_stats_path", "") or "").strip()
+        manifest_stats = str(
+            manifest.get("guided_regeneration_stats_path", "") or ""
+        ).strip()
         if manifest_stats:
             candidates.append(Path(manifest_stats).expanduser())
         if training_report_path is not None:
             report_payload = self._load_json_if_exists(training_report_path)
             dataset_stats_path = str(
-                ((report_payload.get("guided_regeneration_dataset", {}) or {}).get("stats_path", "")) or ""
+                (
+                    (report_payload.get("guided_regeneration_dataset", {}) or {}).get(
+                        "stats_path", ""
+                    )
+                )
+                or ""
             ).strip()
             if dataset_stats_path:
                 candidates.append(Path(dataset_stats_path).expanduser())
@@ -1238,7 +1435,9 @@ class GuidedSVSManager:
             [
                 checkpoint_path.parent / "guided_regeneration_stats.json",
                 checkpoint_path.parent.parent / "_guided_svs_dataset" / "stats.json",
-                checkpoint_path.parent.parent.parent / "_guided_svs_dataset" / "stats.json",
+                checkpoint_path.parent.parent.parent
+                / "_guided_svs_dataset"
+                / "stats.json",
             ]
         )
         for candidate in candidates:
@@ -1262,7 +1461,12 @@ class GuidedSVSManager:
             candidates.append(Path(manifest_vocoder).expanduser())
         if training_report_path is not None:
             report_payload = self._load_json_if_exists(training_report_path)
-            vocoder_path = str((report_payload.get("guided_vocoder", {}) or {}).get("checkpoint_path", "") or "").strip()
+            vocoder_path = str(
+                (report_payload.get("guided_vocoder", {}) or {}).get(
+                    "checkpoint_path", ""
+                )
+                or ""
+            ).strip()
             if vocoder_path:
                 candidates.append(Path(vocoder_path).expanduser())
         candidates.extend(
@@ -1287,11 +1491,20 @@ class GuidedSVSManager:
         cache_key = json.dumps(
             {
                 "checkpoint_path": str(checkpoint_path.resolve()),
-                "config_path": str(config_path.resolve()) if config_path is not None and config_path.exists() else "",
-                "manifest_path": str(manifest_path.resolve()) if manifest_path is not None and manifest_path.exists() else "",
+                "config_path": (
+                    str(config_path.resolve())
+                    if config_path is not None and config_path.exists()
+                    else ""
+                ),
+                "manifest_path": (
+                    str(manifest_path.resolve())
+                    if manifest_path is not None and manifest_path.exists()
+                    else ""
+                ),
                 "training_report_path": (
                     str(training_report_path.resolve())
-                    if training_report_path is not None and training_report_path.exists()
+                    if training_report_path is not None
+                    and training_report_path.exists()
                     else ""
                 ),
             },
@@ -1302,7 +1515,9 @@ class GuidedSVSManager:
             return cached
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model, checkpoint_config = self._load_model_from_checkpoint(checkpoint_path, device=device)
+        model, checkpoint_config = self._load_model_from_checkpoint(
+            checkpoint_path, device=device
+        )
         config = dict(checkpoint_config)
         if config_path is not None and config_path.exists():
             config.update(self._load_json_if_exists(config_path))
@@ -1313,7 +1528,9 @@ class GuidedSVSManager:
         )
         stats = self._load_json_if_exists(stats_path)
         if not stats:
-            raise RuntimeError("Pronunciation regenerator stats file was found but could not be read.")
+            raise RuntimeError(
+                "Pronunciation regenerator stats file was found but could not be read."
+            )
         vocoder_checkpoint_path = self._resolve_vocoder_checkpoint_path(
             checkpoint_path=checkpoint_path,
             manifest_path=manifest_path,
@@ -1338,10 +1555,16 @@ class GuidedSVSManager:
             "device": device,
             "config": config,
             "stats": stats,
-            "voice_prototype": _ensure_voice_signature_dim(stats.get("global_voice_signature", [])),
+            "voice_prototype": _ensure_voice_signature_dim(
+                stats.get("global_voice_signature", [])
+            ),
             "stats_path": str(stats_path),
             "checkpoint_path": str(checkpoint_path),
-            "vocoder_checkpoint_path": str(vocoder_checkpoint_path) if vocoder_checkpoint_path is not None else "",
+            "vocoder_checkpoint_path": (
+                str(vocoder_checkpoint_path)
+                if vocoder_checkpoint_path is not None
+                else ""
+            ),
         }
         self._inference_bundle_cache[cache_key] = bundle
         return bundle
@@ -1355,14 +1578,29 @@ class GuidedSVSManager:
         vocoder = bundle.get("vocoder")
         device = bundle.get("device", torch.device("cpu"))
         if isinstance(vocoder, PersonaNeuralVocoder):
-            mel_tensor = torch.from_numpy(np.asarray(normalized_mel, dtype=np.float32)).unsqueeze(0).to(device)
+            mel_tensor = (
+                torch.from_numpy(np.asarray(normalized_mel, dtype=np.float32))
+                .unsqueeze(0)
+                .to(device)
+            )
             with torch.no_grad():
-                generated_audio = vocoder(mel_tensor).squeeze(0).detach().cpu().numpy().astype(np.float32, copy=False)
-            peak = float(np.max(np.abs(generated_audio))) if generated_audio.size else 0.0
+                generated_audio = (
+                    vocoder(mel_tensor)
+                    .squeeze(0)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32, copy=False)
+                )
+            peak = (
+                float(np.max(np.abs(generated_audio))) if generated_audio.size else 0.0
+            )
             if peak > 0.995:
                 generated_audio = generated_audio * np.float32(0.995 / peak)
             return generated_audio, "persona-neural-vocoder-v1"
-        predicted_log_mel = self._denormalize_log_mel(normalized_mel, dict(bundle.get("stats", {})))
+        predicted_log_mel = self._denormalize_log_mel(
+            normalized_mel, dict(bundle.get("stats", {}))
+        )
         return _render_log_mel_to_audio(predicted_log_mel), "griffinlim_preview_only"
 
     def _extract_f0(
@@ -1377,15 +1615,25 @@ class GuidedSVSManager:
         mono = np.asarray(mono_audio, dtype=np.float32).reshape(-1)
         if mono.size <= 1:
             return np.zeros(frame_count, dtype=np.float32)
-        chunk_samples = max(int(round(sample_rate * FEATURE_CHUNK_SECONDS)), HOP_LENGTH * 8)
+        chunk_samples = max(
+            int(round(sample_rate * FEATURE_CHUNK_SECONDS)), HOP_LENGTH * 8
+        )
         chunk_starts = list(range(0, mono.size, chunk_samples))
         total_chunks = max(1, len(chunk_starts))
 
         def check_cancel() -> None:
-            if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+            if cancel_event is not None and bool(
+                getattr(cancel_event, "is_set", lambda: False)()
+            ):
                 raise InterruptedError("Training stopped by user.")
 
-        def report_chunk_progress(chunk_index: int, total: int, engine_name: str, start_sample: int, end_sample: int) -> None:
+        def report_chunk_progress(
+            chunk_index: int,
+            total: int,
+            engine_name: str,
+            start_sample: int,
+            end_sample: int,
+        ) -> None:
             if progress_callback is None:
                 return
             progress_callback(
@@ -1407,7 +1655,11 @@ class GuidedSVSManager:
                 check_cancel()
                 end_sample = min(mono.size, start_sample + chunk_samples)
                 chunk = np.asarray(mono[start_sample:end_sample], dtype=np.float32)
-                tensor = torch.from_numpy(chunk).unsqueeze(0).to(device=device, dtype=torch.float32)
+                tensor = (
+                    torch.from_numpy(chunk)
+                    .unsqueeze(0)
+                    .to(device=device, dtype=torch.float32)
+                )
                 with torch.no_grad():
                     pitch, periodicity = torchcrepe.predict(
                         tensor,
@@ -1421,16 +1673,22 @@ class GuidedSVSManager:
                         device=device,
                     )
                 frequency = pitch.squeeze(0).detach().cpu().numpy().astype(np.float32)
-                confidence = periodicity.squeeze(0).detach().cpu().numpy().astype(np.float32)
+                confidence = (
+                    periodicity.squeeze(0).detach().cpu().numpy().astype(np.float32)
+                )
                 frequency[confidence < 0.35] = 0.0
                 collected.append(frequency.reshape(-1))
-                report_chunk_progress(chunk_index, total_chunks, "torchcrepe", start_sample, end_sample)
+                report_chunk_progress(
+                    chunk_index, total_chunks, "torchcrepe", start_sample, end_sample
+                )
                 del tensor, pitch, periodicity
                 if device == "cuda":
                     torch.cuda.empty_cache()
             if not collected:
                 return np.zeros(frame_count, dtype=np.float32)
-            return _align_1d(np.concatenate(collected).astype(np.float32, copy=False), frame_count)
+            return _align_1d(
+                np.concatenate(collected).astype(np.float32, copy=False), frame_count
+            )
         except Exception:
             collected = []
             for chunk_index, start_sample in enumerate(chunk_starts, start=1):
@@ -1445,12 +1703,18 @@ class GuidedSVSManager:
                     frame_length=N_FFT,
                     hop_length=HOP_LENGTH,
                 )
-                f0 = np.nan_to_num(np.asarray(f0, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+                f0 = np.nan_to_num(
+                    np.asarray(f0, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
+                )
                 collected.append(f0.reshape(-1))
-                report_chunk_progress(chunk_index, total_chunks, "pyin fallback", start_sample, end_sample)
+                report_chunk_progress(
+                    chunk_index, total_chunks, "pyin fallback", start_sample, end_sample
+                )
             if not collected:
                 return np.zeros(frame_count, dtype=np.float32)
-            return _align_1d(np.concatenate(collected).astype(np.float32, copy=False), frame_count)
+            return _align_1d(
+                np.concatenate(collected).astype(np.float32, copy=False), frame_count
+            )
 
     def _build_word_boundaries(
         self,
@@ -1481,8 +1745,12 @@ class GuidedSVSManager:
             start_frame = int(round((start_seconds * sample_rate) / HOP_LENGTH))
             end_frame = int(round((end_seconds * sample_rate) / HOP_LENGTH))
             if end_frame <= start_frame:
-                start_frame = int(round((word_index / float(total_words)) * frame_count))
-                end_frame = int(round(((word_index + 1) / float(total_words)) * frame_count))
+                start_frame = int(
+                    round((word_index / float(total_words)) * frame_count)
+                )
+                end_frame = int(
+                    round(((word_index + 1) / float(total_words)) * frame_count)
+                )
             start_frame = max(0, min(frame_count - 1, start_frame))
             end_frame = max(start_frame + 1, min(frame_count, end_frame))
             unit_step = (end_frame - start_frame) / float(max(len(units), 1))
@@ -1498,8 +1766,12 @@ class GuidedSVSManager:
                         "unit": unit if unit in PHONE_TO_ID else "UNK",
                         "start_frame": unit_start,
                         "end_frame": unit_end,
-                        "start_seconds": unit_start * HOP_LENGTH / float(max(sample_rate, 1)),
-                        "end_seconds": unit_end * HOP_LENGTH / float(max(sample_rate, 1)),
+                        "start_seconds": unit_start
+                        * HOP_LENGTH
+                        / float(max(sample_rate, 1)),
+                        "end_seconds": unit_end
+                        * HOP_LENGTH
+                        / float(max(sample_rate, 1)),
                     }
                 )
             boundaries.append(
@@ -1509,7 +1781,9 @@ class GuidedSVSManager:
                     "units": list(units),
                     "start_frame": start_frame,
                     "end_frame": end_frame,
-                    "start_seconds": start_frame * HOP_LENGTH / float(max(sample_rate, 1)),
+                    "start_seconds": start_frame
+                    * HOP_LENGTH
+                    / float(max(sample_rate, 1)),
                     "end_seconds": min(
                         clip_duration_seconds,
                         end_frame * HOP_LENGTH / float(max(sample_rate, 1)),
@@ -1544,7 +1818,9 @@ class GuidedSVSManager:
                 unit_name = str(unit_segment.get("unit", "UNK"))
                 if unit_end <= unit_start:
                     continue
-                phone_ids[unit_start:unit_end] = PHONE_TO_ID.get(unit_name, PHONE_TO_ID["UNK"])
+                phone_ids[unit_start:unit_end] = PHONE_TO_ID.get(
+                    unit_name, PHONE_TO_ID["UNK"]
+                )
                 covered_frames[unit_start:unit_end] = 1.0
 
         return phone_ids, float(np.mean(covered_frames)) if covered_frames.size else 0.0
@@ -1593,19 +1869,33 @@ class GuidedSVSManager:
     ) -> None:
         feature_dir.mkdir(parents=True, exist_ok=True)
         np.save(feature_dir / "mel.npy", np.asarray(target_log_mel, dtype=np.float32))
-        np.save(feature_dir / "target_audio.npy", np.asarray(target_audio, dtype=np.float32).reshape(-1))
-        np.save(feature_dir / "guide_mel.npy", np.asarray(guide_log_mel, dtype=np.float32))
+        np.save(
+            feature_dir / "target_audio.npy",
+            np.asarray(target_audio, dtype=np.float32).reshape(-1),
+        )
+        np.save(
+            feature_dir / "guide_mel.npy", np.asarray(guide_log_mel, dtype=np.float32)
+        )
         np.save(feature_dir / "f0.npy", np.asarray(f0, dtype=np.float32))
         np.save(feature_dir / "log_f0.npy", np.asarray(log_f0, dtype=np.float32))
-        np.save(feature_dir / "target_log_f0.npy", np.asarray(target_log_f0, dtype=np.float32))
-        np.save(feature_dir / "target_vuv.npy", np.asarray(target_vuv, dtype=np.float32))
+        np.save(
+            feature_dir / "target_log_f0.npy",
+            np.asarray(target_log_f0, dtype=np.float32),
+        )
+        np.save(
+            feature_dir / "target_vuv.npy", np.asarray(target_vuv, dtype=np.float32)
+        )
         np.save(feature_dir / "vuv.npy", np.asarray(vuv, dtype=np.float32))
         np.save(feature_dir / "energy.npy", np.asarray(energy, dtype=np.float32))
         np.save(feature_dir / "phone_ids.npy", np.asarray(phone_ids, dtype=np.int64))
-        np.save(feature_dir / "lyric_mask.npy", np.asarray(lyric_mask, dtype=np.float32))
+        np.save(
+            feature_dir / "lyric_mask.npy", np.asarray(lyric_mask, dtype=np.float32)
+        )
         np.save(
             feature_dir / "target_voice_signature.npy",
-            _ensure_voice_signature_dim(target_voice_signature).astype(np.float32, copy=False),
+            _ensure_voice_signature_dim(target_voice_signature).astype(
+                np.float32, copy=False
+            ),
         )
 
     def _extract_log_mel(self, mono_audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -1630,12 +1920,16 @@ class GuidedSVSManager:
         target_frames = int(np.asarray(target_log_mel).shape[0])
         if guide_frames <= 1 or target_frames <= 1:
             frame_map = _default_frame_map(guide_frames, target_frames)
-            return frame_map, 0.0, {
-                "mode": "linear-fallback",
-                "guide_frames": guide_frames,
-                "target_frames": target_frames,
-                "normalized_cost": None,
-            }
+            return (
+                frame_map,
+                0.0,
+                {
+                    "mode": "linear-fallback",
+                    "guide_frames": guide_frames,
+                    "target_frames": target_frames,
+                    "normalized_cost": None,
+                },
+            )
         try:
             guide_features = librosa.util.normalize(
                 np.asarray(guide_log_mel, dtype=np.float32).T,
@@ -1670,24 +1964,34 @@ class GuidedSVSManager:
                 left=float(aggregated_guides[0]),
                 right=float(aggregated_guides[-1]),
             ).astype(np.float32)
-            frame_map = np.maximum.accumulate(np.clip(frame_map, 0.0, float(max(guide_frames - 1, 0))))
+            frame_map = np.maximum.accumulate(
+                np.clip(frame_map, 0.0, float(max(guide_frames - 1, 0)))
+            )
             normalized_cost = float(cost_matrix[-1, -1] / float(max(path.shape[0], 1)))
             alignment_score = float(np.clip(1.0 / (1.0 + normalized_cost), 0.0, 1.0))
-            return frame_map, alignment_score, {
-                "mode": "dtw-cosine-mel",
-                "guide_frames": guide_frames,
-                "target_frames": target_frames,
-                "path_length": int(path.shape[0]),
-                "normalized_cost": round(normalized_cost, 6),
-            }
+            return (
+                frame_map,
+                alignment_score,
+                {
+                    "mode": "dtw-cosine-mel",
+                    "guide_frames": guide_frames,
+                    "target_frames": target_frames,
+                    "path_length": int(path.shape[0]),
+                    "normalized_cost": round(normalized_cost, 6),
+                },
+            )
         except Exception:
             frame_map = _default_frame_map(guide_frames, target_frames)
-            return frame_map, 0.0, {
-                "mode": "linear-fallback",
-                "guide_frames": guide_frames,
-                "target_frames": target_frames,
-                "normalized_cost": None,
-            }
+            return (
+                frame_map,
+                0.0,
+                {
+                    "mode": "linear-fallback",
+                    "guide_frames": guide_frames,
+                    "target_frames": target_frames,
+                    "normalized_cost": None,
+                },
+            )
 
     def _warp_word_scores_to_target_timeline(
         self,
@@ -1705,19 +2009,57 @@ class GuidedSVSManager:
             if word_index < 0:
                 continue
             start_seconds = float(entry.get("start", 0.0))
-            end_seconds = max(start_seconds + 0.01, float(entry.get("end", start_seconds + 0.01)))
-            start_frame = int(np.clip(round((start_seconds * sample_rate) / HOP_LENGTH), 0, max(len(source_to_target_frame_map) - 1, 0)))
-            end_frame = int(np.clip(round((end_seconds * sample_rate) / HOP_LENGTH), 0, max(len(source_to_target_frame_map) - 1, 0)))
-            warped_start_frame = float(source_to_target_frame_map[start_frame]) if len(source_to_target_frame_map) else 0.0
-            warped_end_frame = float(source_to_target_frame_map[end_frame]) if len(source_to_target_frame_map) else warped_start_frame + 1.0
+            end_seconds = max(
+                start_seconds + 0.01, float(entry.get("end", start_seconds + 0.01))
+            )
+            start_frame = int(
+                np.clip(
+                    round((start_seconds * sample_rate) / HOP_LENGTH),
+                    0,
+                    max(len(source_to_target_frame_map) - 1, 0),
+                )
+            )
+            end_frame = int(
+                np.clip(
+                    round((end_seconds * sample_rate) / HOP_LENGTH),
+                    0,
+                    max(len(source_to_target_frame_map) - 1, 0),
+                )
+            )
+            warped_start_frame = (
+                float(source_to_target_frame_map[start_frame])
+                if len(source_to_target_frame_map)
+                else 0.0
+            )
+            warped_end_frame = (
+                float(source_to_target_frame_map[end_frame])
+                if len(source_to_target_frame_map)
+                else warped_start_frame + 1.0
+            )
             if warped_end_frame <= warped_start_frame:
                 warped_end_frame = warped_start_frame + 1.0
             warped_scores.append(
                 {
                     "index": word_index,
                     "word": str(entry.get("word", "")),
-                    "start": float(np.clip((warped_start_frame * HOP_LENGTH) / float(max(sample_rate, 1)), 0.0, (target_frame_count * HOP_LENGTH) / float(max(sample_rate, 1)))),
-                    "end": float(np.clip((warped_end_frame * HOP_LENGTH) / float(max(sample_rate, 1)), 0.0, (target_frame_count * HOP_LENGTH) / float(max(sample_rate, 1)))),
+                    "start": float(
+                        np.clip(
+                            (warped_start_frame * HOP_LENGTH)
+                            / float(max(sample_rate, 1)),
+                            0.0,
+                            (target_frame_count * HOP_LENGTH)
+                            / float(max(sample_rate, 1)),
+                        )
+                    ),
+                    "end": float(
+                        np.clip(
+                            (warped_end_frame * HOP_LENGTH)
+                            / float(max(sample_rate, 1)),
+                            0.0,
+                            (target_frame_count * HOP_LENGTH)
+                            / float(max(sample_rate, 1)),
+                        )
+                    ),
                 }
             )
         return warped_scores
@@ -1731,7 +2073,8 @@ class GuidedSVSManager:
     ) -> float:
         return float(
             np.clip(
-                1.0 - (
+                1.0
+                - (
                     (0.5 * _normalize_similarity_score(conditioning_similarity))
                     + (0.35 * float(np.clip(alignment_score, 0.0, 1.0)))
                     + (0.15 * float(np.clip(phone_coverage, 0.0, 1.0)))
@@ -1757,7 +2100,9 @@ class GuidedSVSManager:
                 progress_callback(float(np.clip(progress, 0.0, 1.0)), message, detail)
 
         def check_cancel() -> None:
-            if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+            if cancel_event is not None and bool(
+                getattr(cancel_event, "is_set", lambda: False)()
+            ):
                 raise InterruptedError("Training stopped by user.")
 
         mono_audio = np.asarray(audio, dtype=np.float32)
@@ -1826,7 +2171,9 @@ class GuidedSVSManager:
             local_log_f0 = log_f0[start_frame:end_frame].astype(np.float32, copy=False)
             local_vuv = vuv[start_frame:end_frame].astype(np.float32, copy=False)
             local_energy = energy[start_frame:end_frame].astype(np.float32, copy=False)
-            local_phone_ids = phone_ids[start_frame:end_frame].astype(np.int64, copy=False)
+            local_phone_ids = phone_ids[start_frame:end_frame].astype(
+                np.int64, copy=False
+            )
             self._save_training_slice(
                 feature_dir=feature_dir,
                 target_log_mel=local_target,
@@ -1855,7 +2202,11 @@ class GuidedSVSManager:
                     sample_id=sample_id,
                     lyrics="",
                     n_frames=int(local_target.shape[0]),
-                    duration_seconds=float((end_frame - start_frame) * HOP_LENGTH / float(max(sample_rate, 1))),
+                    duration_seconds=float(
+                        (end_frame - start_frame)
+                        * HOP_LENGTH
+                        / float(max(sample_rate, 1))
+                    ),
                     aligned_word_count=0,
                     frame_phone_coverage=0.0,
                     feature_dir=sample_id,
@@ -1874,7 +2225,9 @@ class GuidedSVSManager:
             )
 
         if not sample_entries:
-            raise RuntimeError("Base-voice training windows could not be prepared from the uploaded clip.")
+            raise RuntimeError(
+                "Base-voice training windows could not be prepared from the uploaded clip."
+            )
         report(
             1.0,
             f"Finished base-voice identity windows for {source_name}.",
@@ -1904,7 +2257,9 @@ class GuidedSVSManager:
                 progress_callback(float(np.clip(progress, 0.0, 1.0)), message, detail)
 
         def check_cancel() -> None:
-            if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+            if cancel_event is not None and bool(
+                getattr(cancel_event, "is_set", lambda: False)()
+            ):
                 raise InterruptedError("Training stopped by user.")
 
         guide_mono = np.asarray(guide_audio, dtype=np.float32)
@@ -1980,8 +2335,12 @@ class GuidedSVSManager:
             center=True,
         ).squeeze()
         guide_energy = _align_1d(guide_energy, target_frame_count)
-        guide_log_f0 = np.where(guide_f0 > 0.0, np.log(np.maximum(guide_f0, 1.0)), 0.0).astype(np.float32)
-        target_log_f0 = np.where(target_f0 > 0.0, np.log(np.maximum(target_f0, 1.0)), 0.0).astype(np.float32)
+        guide_log_f0 = np.where(
+            guide_f0 > 0.0, np.log(np.maximum(guide_f0, 1.0)), 0.0
+        ).astype(np.float32)
+        target_log_f0 = np.where(
+            target_f0 > 0.0, np.log(np.maximum(target_f0, 1.0)), 0.0
+        ).astype(np.float32)
         guide_vuv = (guide_f0 > 0.0).astype(np.float32)
         target_vuv = (target_f0 > 0.0).astype(np.float32)
 
@@ -2001,7 +2360,9 @@ class GuidedSVSManager:
         )
         warped_guide_scores = self._warp_word_scores_to_target_timeline(
             word_scores=normalized_guide_scores,
-            source_to_target_frame_map=_invert_monotonic_frame_map(dtw_frame_map, raw_guide_log_mel.shape[0]),
+            source_to_target_frame_map=_invert_monotonic_frame_map(
+                dtw_frame_map, raw_guide_log_mel.shape[0]
+            ),
             sample_rate=sample_rate,
             target_frame_count=target_frame_count,
         )
@@ -2034,7 +2395,9 @@ class GuidedSVSManager:
             unit_segments = list(word_boundary.get("unit_segments", []))
             if not unit_segments:
                 continue
-            for anchor_index, (anchor_start, anchor_end) in enumerate(self._build_subword_anchor_spans(len(unit_segments))):
+            for anchor_index, (anchor_start, anchor_end) in enumerate(
+                self._build_subword_anchor_spans(len(unit_segments))
+            ):
                 context_start = max(0, anchor_start - 1)
                 context_end = min(len(unit_segments) - 1, anchor_end + 1)
                 slice_plans.append(
@@ -2049,7 +2412,9 @@ class GuidedSVSManager:
                 )
 
         if not slice_plans:
-            raise RuntimeError("No paired persona windows could be prepared from the aligned song pair.")
+            raise RuntimeError(
+                "No paired persona windows could be prepared from the aligned song pair."
+            )
 
         feature_root = output_dir / "features"
         feature_root.mkdir(parents=True, exist_ok=True)
@@ -2066,17 +2431,24 @@ class GuidedSVSManager:
             context_word_end = min(len(target_boundaries) - 1, word_index + 1)
             target_context_start = dict(target_boundaries[context_word_start])
             target_context_end = dict(target_boundaries[context_word_end])
-            target_start = max(0, int(target_context_start.get("start_frame", 0)) - pad_frames)
+            target_start = max(
+                0, int(target_context_start.get("start_frame", 0)) - pad_frames
+            )
             target_end = min(
                 target_frame_count,
-                int(target_context_end.get("end_frame", target_frame_count)) + pad_frames,
+                int(target_context_end.get("end_frame", target_frame_count))
+                + pad_frames,
             )
             if target_end - target_start < 4:
                 continue
 
             guide_start_boundary = guide_boundary_lookup.get(context_word_start, {})
-            guide_end_boundary = guide_boundary_lookup.get(context_word_end, guide_start_boundary)
-            guide_start_frame = int(guide_start_boundary.get("start_frame", target_start))
+            guide_end_boundary = guide_boundary_lookup.get(
+                context_word_end, guide_start_boundary
+            )
+            guide_start_frame = int(
+                guide_start_boundary.get("start_frame", target_start)
+            )
             guide_end_frame = int(guide_end_boundary.get("end_frame", target_end))
             if guide_end_frame <= guide_start_frame:
                 guide_start_frame = target_start
@@ -2092,18 +2464,42 @@ class GuidedSVSManager:
                 f"p{int(plan['anchor_index']):02d}"
             )
             feature_dir = feature_root / sample_id
-            local_target = target_log_mel[target_start:target_end].astype(np.float32, copy=False)
+            local_target = target_log_mel[target_start:target_end].astype(
+                np.float32, copy=False
+            )
             local_length = int(local_target.shape[0])
-            local_guide_mel = _align_2d(guide_log_mel[guide_start:guide_end], local_length).astype(np.float32, copy=False)
-            local_f0 = _align_1d(guide_f0[guide_start:guide_end], local_length).astype(np.float32, copy=False)
-            local_log_f0 = _align_1d(guide_log_f0[guide_start:guide_end], local_length).astype(np.float32, copy=False)
-            local_target_log_f0 = target_log_f0[target_start:target_end].astype(np.float32, copy=False)
-            local_target_vuv = target_vuv[target_start:target_end].astype(np.float32, copy=False)
-            local_vuv = _align_1d(guide_vuv[guide_start:guide_end], local_length).astype(np.float32, copy=False)
-            local_energy = _align_1d(guide_energy[guide_start:guide_end], local_length).astype(np.float32, copy=False)
-            local_phone_ids = target_phone_ids[target_start:target_end].astype(np.int64, copy=False)
-            local_lyric_mask = (local_phone_ids != PHONE_TO_ID["SP"]).astype(np.float32, copy=False)
-            local_coverage = float(np.mean(local_phone_ids != PHONE_TO_ID["SP"])) if local_phone_ids.size else 0.0
+            local_guide_mel = _align_2d(
+                guide_log_mel[guide_start:guide_end], local_length
+            ).astype(np.float32, copy=False)
+            local_f0 = _align_1d(guide_f0[guide_start:guide_end], local_length).astype(
+                np.float32, copy=False
+            )
+            local_log_f0 = _align_1d(
+                guide_log_f0[guide_start:guide_end], local_length
+            ).astype(np.float32, copy=False)
+            local_target_log_f0 = target_log_f0[target_start:target_end].astype(
+                np.float32, copy=False
+            )
+            local_target_vuv = target_vuv[target_start:target_end].astype(
+                np.float32, copy=False
+            )
+            local_vuv = _align_1d(
+                guide_vuv[guide_start:guide_end], local_length
+            ).astype(np.float32, copy=False)
+            local_energy = _align_1d(
+                guide_energy[guide_start:guide_end], local_length
+            ).astype(np.float32, copy=False)
+            local_phone_ids = target_phone_ids[target_start:target_end].astype(
+                np.int64, copy=False
+            )
+            local_lyric_mask = (local_phone_ids != PHONE_TO_ID["SP"]).astype(
+                np.float32, copy=False
+            )
+            local_coverage = (
+                float(np.mean(local_phone_ids != PHONE_TO_ID["SP"]))
+                if local_phone_ids.size
+                else 0.0
+            )
             local_difficulty = self._compute_difficulty_score(
                 conditioning_similarity=guide_similarity_score,
                 alignment_score=dtw_alignment_score,
@@ -2114,8 +2510,12 @@ class GuidedSVSManager:
                 for idx in range(int(plan["anchor_start"]), int(plan["anchor_end"]) + 1)
             ]
             if local_lyric_mask.size:
-                guide_gate = (0.08 + (0.92 * local_lyric_mask[:, np.newaxis])).astype(np.float32, copy=False)
-                local_guide_mel = (local_guide_mel * guide_gate).astype(np.float32, copy=False)
+                guide_gate = (0.08 + (0.92 * local_lyric_mask[:, np.newaxis])).astype(
+                    np.float32, copy=False
+                )
+                local_guide_mel = (local_guide_mel * guide_gate).astype(
+                    np.float32, copy=False
+                )
 
             self._save_training_slice(
                 feature_dir=feature_dir,
@@ -2145,7 +2545,9 @@ class GuidedSVSManager:
                     sample_id=sample_id,
                     lyrics=str(word_boundary.get("word", "")),
                     n_frames=local_length,
-                    duration_seconds=float(local_length * HOP_LENGTH / float(max(sample_rate, 1))),
+                    duration_seconds=float(
+                        local_length * HOP_LENGTH / float(max(sample_rate, 1))
+                    ),
                     aligned_word_count=1,
                     frame_phone_coverage=local_coverage,
                     feature_dir=sample_id,
@@ -2154,7 +2556,9 @@ class GuidedSVSManager:
                     anchor_word=str(word_boundary.get("word", "")),
                     anchor_units=anchor_units,
                     slice_kind="paired-persona-window",
-                    conditioning_similarity=_normalize_similarity_score(guide_similarity_score),
+                    conditioning_similarity=_normalize_similarity_score(
+                        guide_similarity_score
+                    ),
                     alignment_score=dtw_alignment_score,
                     difficulty_score=local_difficulty,
                 )
@@ -2171,7 +2575,9 @@ class GuidedSVSManager:
             )
 
         if not sample_entries:
-            raise RuntimeError("Paired persona slicing finished without any usable windows.")
+            raise RuntimeError(
+                "Paired persona slicing finished without any usable windows."
+            )
         report(
             1.0,
             f"Finished paired persona windows for {conditioning_name}.",
@@ -2197,7 +2603,9 @@ class GuidedSVSManager:
                 progress_callback(float(np.clip(progress, 0.0, 1.0)), message, detail)
 
         def check_cancel() -> None:
-            if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+            if cancel_event is not None and bool(
+                getattr(cancel_event, "is_set", lambda: False)()
+            ):
                 raise InterruptedError("Training stopped by user.")
 
         mono_audio = np.asarray(audio, dtype=np.float32)
@@ -2298,7 +2706,9 @@ class GuidedSVSManager:
                 )
 
         if not slice_plans:
-            raise RuntimeError("No pronunciation windows could be prepared from the aligned dataset.")
+            raise RuntimeError(
+                "No pronunciation windows could be prepared from the aligned dataset."
+            )
 
         report(
             0.76,
@@ -2318,7 +2728,9 @@ class GuidedSVSManager:
             context_start_segment = unit_segments[int(plan["context_start"])]
             context_end_segment = unit_segments[int(plan["context_end"])]
             slice_start = max(0, int(context_start_segment["start_frame"]) - pad_frames)
-            slice_end = min(frame_count, int(context_end_segment["end_frame"]) + pad_frames)
+            slice_end = min(
+                frame_count, int(context_end_segment["end_frame"]) + pad_frames
+            )
             if slice_end - slice_start < 4:
                 continue
 
@@ -2328,13 +2740,21 @@ class GuidedSVSManager:
             )
             feature_dir = feature_root / sample_id
             feature_dir.mkdir(parents=True, exist_ok=True)
-            local_log_mel = log_mel[slice_start:slice_end].astype(np.float32, copy=False)
+            local_log_mel = log_mel[slice_start:slice_end].astype(
+                np.float32, copy=False
+            )
             local_f0 = f0[slice_start:slice_end].astype(np.float32, copy=False)
             local_log_f0 = log_f0[slice_start:slice_end].astype(np.float32, copy=False)
             local_vuv = vuv[slice_start:slice_end].astype(np.float32, copy=False)
             local_energy = energy[slice_start:slice_end].astype(np.float32, copy=False)
-            local_phone_ids = phone_ids[slice_start:slice_end].astype(np.int64, copy=False)
-            local_coverage = float(np.mean(local_phone_ids != PHONE_TO_ID["SP"])) if local_phone_ids.size else 0.0
+            local_phone_ids = phone_ids[slice_start:slice_end].astype(
+                np.int64, copy=False
+            )
+            local_coverage = (
+                float(np.mean(local_phone_ids != PHONE_TO_ID["SP"]))
+                if local_phone_ids.size
+                else 0.0
+            )
             anchor_units = [
                 str(unit_segments[idx].get("unit", "UNK"))
                 for idx in range(int(plan["anchor_start"]), int(plan["anchor_end"]) + 1)
@@ -2356,7 +2776,9 @@ class GuidedSVSManager:
                 vuv=local_vuv,
                 energy=local_energy,
                 phone_ids=local_phone_ids,
-                lyric_mask=(local_phone_ids != PHONE_TO_ID["SP"]).astype(np.float32, copy=False),
+                lyric_mask=(local_phone_ids != PHONE_TO_ID["SP"]).astype(
+                    np.float32, copy=False
+                ),
                 target_voice_signature=_compute_voice_signature_np(
                     log_mel=local_log_mel,
                     log_f0=local_log_f0,
@@ -2369,7 +2791,11 @@ class GuidedSVSManager:
                     sample_id=sample_id,
                     lyrics=str(word_boundary.get("word", "")),
                     n_frames=int(local_log_mel.shape[0]),
-                    duration_seconds=float((slice_end - slice_start) * HOP_LENGTH / float(max(sample_rate, 1))),
+                    duration_seconds=float(
+                        (slice_end - slice_start)
+                        * HOP_LENGTH
+                        / float(max(sample_rate, 1))
+                    ),
                     aligned_word_count=1,
                     frame_phone_coverage=local_coverage,
                     feature_dir=sample_id,
@@ -2392,7 +2818,9 @@ class GuidedSVSManager:
             )
 
         if not sample_entries:
-            raise RuntimeError("Pronunciation-window extraction finished without any usable samples.")
+            raise RuntimeError(
+                "Pronunciation-window extraction finished without any usable samples."
+            )
         report(
             1.0,
             f"Pronunciation windows finished for {source_name}.",
@@ -2417,7 +2845,9 @@ class GuidedSVSManager:
                 progress_callback(float(np.clip(progress, 0.0, 1.0)), message, detail)
 
         def check_cancel() -> None:
-            if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+            if cancel_event is not None and bool(
+                getattr(cancel_event, "is_set", lambda: False)()
+            ):
                 raise InterruptedError("Training stopped by user.")
 
         mono_audio = np.asarray(audio, dtype=np.float32)
@@ -2550,7 +2980,9 @@ class GuidedSVSManager:
         entries = [entry.to_dict() for entry in sample_entries]
         dataset_dir.mkdir(parents=True, exist_ok=True)
         processed_metadata_path = dataset_dir / "processed_metadata.json"
-        processed_metadata_path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+        processed_metadata_path.write_text(
+            json.dumps(entries, indent=2), encoding="utf-8"
+        )
 
         mel_sum = np.zeros(N_MELS, dtype=np.float64)
         mel_sq_sum = np.zeros(N_MELS, dtype=np.float64)
@@ -2574,7 +3006,9 @@ class GuidedSVSManager:
             total_seconds += float(entry.get("duration_seconds", 0.0))
 
         mel_mean = mel_sum / max(mel_frames, 1)
-        mel_var = np.maximum((mel_sq_sum / max(mel_frames, 1)) - np.square(mel_mean), 1e-6)
+        mel_var = np.maximum(
+            (mel_sq_sum / max(mel_frames, 1)) - np.square(mel_mean), 1e-6
+        )
         stacked_f0 = (
             np.concatenate(log_f0_values).astype(np.float32, copy=False)
             if log_f0_values
@@ -2618,7 +3052,9 @@ class GuidedSVSManager:
                 )
             )
         global_voice_signature = (
-            np.mean(np.stack(voice_signatures, axis=0), axis=0).astype(np.float32, copy=False)
+            np.mean(np.stack(voice_signatures, axis=0), axis=0).astype(
+                np.float32, copy=False
+            )
             if voice_signatures
             else np.zeros(VOICE_SIGNATURE_DIM, dtype=np.float32)
         )
@@ -2651,7 +3087,9 @@ class GuidedSVSManager:
                     "sample_count": len(entries),
                     "total_frames": mel_frames,
                     "total_seconds": round(total_seconds, 3),
-                    "avg_frames_per_sample": round(float(mel_frames / max(len(entries), 1)), 2),
+                    "avg_frames_per_sample": round(
+                        float(mel_frames / max(len(entries), 1)), 2
+                    ),
                     "voice_signature_dim": VOICE_SIGNATURE_DIM,
                 },
                 indent=2,
@@ -2684,10 +3122,14 @@ class GuidedSVSManager:
         List[Dict[str, object]],
         Dict[str, object],
     ]:
-        processed_metadata = json.loads((dataset_dir / "processed_metadata.json").read_text(encoding="utf-8"))
+        processed_metadata = json.loads(
+            (dataset_dir / "processed_metadata.json").read_text(encoding="utf-8")
+        )
         stats = json.loads((dataset_dir / "stats.json").read_text(encoding="utf-8"))
         if not processed_metadata:
-            raise RuntimeError("No voice-builder training feature entries were prepared.")
+            raise RuntimeError(
+                "No voice-builder training feature entries were prepared."
+            )
         filtered_entries, filter_metadata = self._filter_training_entries(
             [dict(entry) for entry in processed_metadata]
         )
@@ -2719,14 +3161,23 @@ class GuidedSVSManager:
             random_crop=False,
             shuffle=False,
         )
-        return train_loader, val_loader, stats, train_entries, val_entries, filter_metadata
+        return (
+            train_loader,
+            val_loader,
+            stats,
+            train_entries,
+            val_entries,
+            filter_metadata,
+        )
 
     def _get_training_hardware_profile(self) -> Dict[str, object]:
         device_type = "cuda" if torch.cuda.is_available() else "cpu"
         gpu_memory_gb = 0.0
         if device_type == "cuda":
             try:
-                gpu_memory_gb = float(torch.cuda.get_device_properties(0).total_memory) / float(1024**3)
+                gpu_memory_gb = float(
+                    torch.cuda.get_device_properties(0).total_memory
+                ) / float(1024**3)
             except Exception:
                 gpu_memory_gb = 0.0
         cpu_count = max(1, os.cpu_count() or 1)
@@ -2742,7 +3193,12 @@ class GuidedSVSManager:
                 "max_frames": 1024,
                 "num_workers": min(worker_cap, cpu_count),
                 "prefetch_factor": 6,
-                "model": {"d_model": 640, "n_heads": 8, "n_layers": 16, "dropout": 0.08},
+                "model": {
+                    "d_model": 640,
+                    "n_heads": 8,
+                    "n_layers": 16,
+                    "dropout": 0.08,
+                },
                 "compile_model": True,
                 "precision_mode": "bf16" if bf16_supported else "fp16",
                 "use_fused_adamw": True,
@@ -2754,7 +3210,12 @@ class GuidedSVSManager:
                 "max_frames": 768,
                 "num_workers": min(min(worker_cap, 16), cpu_count),
                 "prefetch_factor": 4,
-                "model": {"d_model": 512, "n_heads": 8, "n_layers": 14, "dropout": 0.08},
+                "model": {
+                    "d_model": 512,
+                    "n_heads": 8,
+                    "n_layers": 14,
+                    "dropout": 0.08,
+                },
                 "compile_model": True,
                 "precision_mode": "bf16" if bf16_supported else "fp16",
                 "use_fused_adamw": True,
@@ -2766,7 +3227,12 @@ class GuidedSVSManager:
                 "max_frames": 544,
                 "num_workers": min(min(worker_cap, 12), cpu_count),
                 "prefetch_factor": 3,
-                "model": {"d_model": 384, "n_heads": 8, "n_layers": 10, "dropout": 0.09},
+                "model": {
+                    "d_model": 384,
+                    "n_heads": 8,
+                    "n_layers": 10,
+                    "dropout": 0.09,
+                },
                 "compile_model": True,
                 "precision_mode": "bf16" if bf16_supported else "fp16",
                 "use_fused_adamw": True,
@@ -2951,10 +3417,14 @@ class GuidedSVSManager:
             }
 
         identity_entries = [
-            entry for entry in prepared_entries if str(entry.get("slice_kind", "")) == "base-identity-window"
+            entry
+            for entry in prepared_entries
+            if str(entry.get("slice_kind", "")) == "base-identity-window"
         ]
         paired_entries = [
-            entry for entry in prepared_entries if str(entry.get("slice_kind", "")) != "base-identity-window"
+            entry
+            for entry in prepared_entries
+            if str(entry.get("slice_kind", "")) != "base-identity-window"
         ]
         if len(paired_entries) < 12:
             return prepared_entries, {
@@ -2967,9 +3437,15 @@ class GuidedSVSManager:
 
         scored_pairs: List[Dict[str, object]] = []
         for entry in paired_entries:
-            alignment_score = float(np.clip(float(entry.get("alignment_score", 0.0) or 0.0), 0.0, 1.0))
-            conditioning_similarity = _normalize_similarity_score(entry.get("conditioning_similarity", 0.0))
-            frame_phone_coverage = float(np.clip(float(entry.get("frame_phone_coverage", 0.0) or 0.0), 0.0, 1.0))
+            alignment_score = float(
+                np.clip(float(entry.get("alignment_score", 0.0) or 0.0), 0.0, 1.0)
+            )
+            conditioning_similarity = _normalize_similarity_score(
+                entry.get("conditioning_similarity", 0.0)
+            )
+            frame_phone_coverage = float(
+                np.clip(float(entry.get("frame_phone_coverage", 0.0) or 0.0), 0.0, 1.0)
+            )
             quality_score = float(
                 np.clip(
                     (0.5 * alignment_score)
@@ -3023,7 +3499,10 @@ class GuidedSVSManager:
         lengths: torch.Tensor,
     ) -> torch.Tensor:
         max_frames = int(target.shape[1])
-        mask = (torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1)).unsqueeze(-1)
+        mask = (
+            torch.arange(max_frames, device=lengths.device).unsqueeze(0)
+            < lengths.unsqueeze(1)
+        ).unsqueeze(-1)
         diff = torch.abs(prediction - target) * mask
         return diff.sum() / mask.sum().clamp(min=1)
 
@@ -3034,7 +3513,9 @@ class GuidedSVSManager:
         lengths: torch.Tensor,
     ) -> torch.Tensor:
         max_frames = int(target.shape[1])
-        time_mask = torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1)
+        time_mask = torch.arange(max_frames, device=lengths.device).unsqueeze(
+            0
+        ) < lengths.unsqueeze(1)
         voiced_mask = torch.abs(target) > 1e-6
         mask = (time_mask & voiced_mask).to(dtype=prediction.dtype)
         diff = torch.abs(prediction - target) * mask
@@ -3047,10 +3528,16 @@ class GuidedSVSManager:
         lengths: torch.Tensor,
     ) -> torch.Tensor:
         max_frames = int(target.shape[1])
-        mask = (torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1)).to(
-            dtype=logits.dtype
+        mask = (
+            torch.arange(max_frames, device=lengths.device).unsqueeze(0)
+            < lengths.unsqueeze(1)
+        ).to(dtype=logits.dtype)
+        loss = (
+            nn.functional.binary_cross_entropy_with_logits(
+                logits, target, reduction="none"
+            )
+            * mask
         )
-        loss = nn.functional.binary_cross_entropy_with_logits(logits, target, reduction="none") * mask
         return loss.sum() / mask.sum().clamp(min=1.0)
 
     def _masked_phone_cross_entropy_loss(
@@ -3062,7 +3549,10 @@ class GuidedSVSManager:
     ) -> torch.Tensor:
         max_frames = int(target.shape[1])
         valid = (
-            (torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1))
+            (
+                torch.arange(max_frames, device=lengths.device).unsqueeze(0)
+                < lengths.unsqueeze(1)
+            )
             & (target != PHONE_TO_ID["PAD"])
             & (target != PHONE_TO_ID["SP"])
         )
@@ -3073,9 +3563,13 @@ class GuidedSVSManager:
             target,
             reduction="none",
         )
-        frame_weights = (0.45 + (1.55 * torch.clamp(lyric_mask, 0.0, 1.0))).to(dtype=logits.dtype)
+        frame_weights = (0.45 + (1.55 * torch.clamp(lyric_mask, 0.0, 1.0))).to(
+            dtype=logits.dtype
+        )
         frame_weights = frame_weights * valid.to(dtype=logits.dtype)
-        return (per_frame_loss * frame_weights).sum() / frame_weights.sum().clamp(min=1.0)
+        return (per_frame_loss * frame_weights).sum() / frame_weights.sum().clamp(
+            min=1.0
+        )
 
     def _masked_delta_loss(
         self,
@@ -3090,10 +3584,9 @@ class GuidedSVSManager:
         pred_delta = prediction[:, 1:] - prediction[:, :-1]
         target_delta = target[:, 1:] - target[:, :-1]
         max_frames = int(prediction.shape[1] - 1)
-        valid = (
-            torch.arange(max_frames, device=lengths.device).unsqueeze(0)
-            < torch.clamp(lengths - 1, min=0).unsqueeze(1)
-        )
+        valid = torch.arange(max_frames, device=lengths.device).unsqueeze(
+            0
+        ) < torch.clamp(lengths - 1, min=0).unsqueeze(1)
         if prediction.dim() == 3:
             valid = valid.unsqueeze(-1)
             if mask is not None:
@@ -3111,7 +3604,10 @@ class GuidedSVSManager:
         lengths: torch.Tensor,
     ) -> torch.Tensor:
         max_frames = int(prediction.shape[1])
-        valid = (torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1)).unsqueeze(-1)
+        valid = (
+            torch.arange(max_frames, device=lengths.device).unsqueeze(0)
+            < lengths.unsqueeze(1)
+        ).unsqueeze(-1)
         off_lyric = (lyric_mask < 0.5).unsqueeze(-1)
         mask = (valid & off_lyric).to(dtype=prediction.dtype)
         if torch.sum(mask) <= 0:
@@ -3128,10 +3624,15 @@ class GuidedSVSManager:
         masked_prediction = prediction
         masked_target = target
         max_frames = int(target.shape[1])
-        time_mask = (torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1)).unsqueeze(-1)
+        time_mask = (
+            torch.arange(max_frames, device=lengths.device).unsqueeze(0)
+            < lengths.unsqueeze(1)
+        ).unsqueeze(-1)
         masked_prediction = masked_prediction * time_mask
         masked_target = masked_target * time_mask
-        prediction_series = masked_prediction.transpose(1, 2).reshape(-1, max_frames).float()
+        prediction_series = (
+            masked_prediction.transpose(1, 2).reshape(-1, max_frames).float()
+        )
         target_series = masked_target.transpose(1, 2).reshape(-1, max_frames).float()
         resolution_specs = [(16, 4), (32, 8), (64, 16)]
         stft_loss = torch.zeros((), device=prediction.device, dtype=torch.float32)
@@ -3140,7 +3641,9 @@ class GuidedSVSManager:
         for n_fft, hop_length in resolution_specs:
             if max_frames < n_fft:
                 continue
-            window = torch.hann_window(n_fft, device=prediction.device, dtype=torch.float32)
+            window = torch.hann_window(
+                n_fft, device=prediction.device, dtype=torch.float32
+            )
             pred_stft = torch.stft(
                 prediction_series,
                 n_fft=n_fft,
@@ -3162,9 +3665,13 @@ class GuidedSVSManager:
             stft_loss = stft_loss + torch.mean(torch.abs(pred_mag - target_mag))
             log_pred_mag = torch.log(torch.clamp(pred_mag, min=1e-5))
             log_target_mag = torch.log(torch.clamp(target_mag, min=1e-5))
-            stft_loss = stft_loss + (0.5 * torch.mean(torch.abs(log_pred_mag - log_target_mag)))
+            stft_loss = stft_loss + (
+                0.5 * torch.mean(torch.abs(log_pred_mag - log_target_mag))
+            )
             phase_delta = torch.angle(pred_stft) - torch.angle(target_stft)
-            phase_delta = torch.atan2(torch.sin(phase_delta), torch.cos(phase_delta)).abs()
+            phase_delta = torch.atan2(
+                torch.sin(phase_delta), torch.cos(phase_delta)
+            ).abs()
             phase_loss = phase_loss + torch.mean(phase_delta)
             used += 1
         if used <= 0:
@@ -3184,7 +3691,9 @@ class GuidedSVSManager:
             torch.arange(prediction.shape[1], device=sample_lengths.device).unsqueeze(0)
             < sample_lengths.unsqueeze(1)
         ).to(dtype=prediction.dtype)
-        return torch.sum(torch.abs(masked_prediction - masked_target) * valid) / valid.sum().clamp_min(1.0)
+        return torch.sum(
+            torch.abs(masked_prediction - masked_target) * valid
+        ) / valid.sum().clamp_min(1.0)
 
     def _multi_resolution_wave_stft_loss(
         self,
@@ -3201,7 +3710,9 @@ class GuidedSVSManager:
             if int(masked_prediction.shape[1]) < fft_size:
                 continue
             hop = max(64, fft_size // 4)
-            window = torch.hann_window(fft_size, device=prediction.device, dtype=prediction.dtype)
+            window = torch.hann_window(
+                fft_size, device=prediction.device, dtype=prediction.dtype
+            )
             pred_stft = torch.stft(
                 masked_prediction,
                 n_fft=fft_size,
@@ -3221,7 +3732,10 @@ class GuidedSVSManager:
             pred_mag = pred_stft.abs()
             target_mag = target_stft.abs()
             total = total + torch.mean(torch.abs(pred_mag - target_mag))
-            total = total + (0.5 * torch.mean(torch.abs(torch.log1p(pred_mag) - torch.log1p(target_mag))))
+            total = total + (
+                0.5
+                * torch.mean(torch.abs(torch.log1p(pred_mag) - torch.log1p(target_mag)))
+            )
             used += 1
         if used <= 0:
             return torch.mean(torch.abs(masked_prediction - masked_target))
@@ -3252,15 +3766,20 @@ class GuidedSVSManager:
         real_outputs = discriminator(real_audio)
         fake_outputs = discriminator(fake_audio)
         adversarial = torch.zeros((), device=real_audio.device, dtype=real_audio.dtype)
-        feature_matching = torch.zeros((), device=real_audio.device, dtype=real_audio.dtype)
+        feature_matching = torch.zeros(
+            (), device=real_audio.device, dtype=real_audio.dtype
+        )
         scale_count = max(len(fake_outputs), 1)
-        for (real_logits, real_features), (fake_logits, fake_features) in zip(real_outputs, fake_outputs):
+        for (real_logits, real_features), (fake_logits, fake_features) in zip(
+            real_outputs, fake_outputs
+        ):
             adversarial = adversarial - fake_logits.mean()
             if real_features and fake_features:
                 layer_count = max(len(fake_features), 1)
                 for real_feature, fake_feature in zip(real_features, fake_features):
                     feature_matching = feature_matching + (
-                        torch.mean(torch.abs(fake_feature - real_feature.detach())) / float(layer_count)
+                        torch.mean(torch.abs(fake_feature - real_feature.detach()))
+                        / float(layer_count)
                     )
         return adversarial / float(scale_count), feature_matching / float(scale_count)
 
@@ -3316,9 +3835,9 @@ class GuidedSVSManager:
     ) -> Dict[str, float]:
         max_frames = int(target.shape[1])
         valid = (
-            (torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1))
-            & (target != PHONE_TO_ID["PAD"])
-        )
+            torch.arange(max_frames, device=lengths.device).unsqueeze(0)
+            < lengths.unsqueeze(1)
+        ) & (target != PHONE_TO_ID["PAD"])
         predictions = torch.argmax(logits, dim=-1)
         correct = (predictions == target) & valid
         lyric_valid = valid & (lyric_mask > 0.5) & (target != PHONE_TO_ID["SP"])
@@ -3337,9 +3856,9 @@ class GuidedSVSManager:
         lengths: torch.Tensor,
     ) -> Dict[str, float]:
         max_frames = int(target.shape[1])
-        valid = (
-            torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1)
-        )
+        valid = torch.arange(max_frames, device=lengths.device).unsqueeze(
+            0
+        ) < lengths.unsqueeze(1)
         predictions = torch.sigmoid(logits) >= 0.5
         target_voiced = target >= 0.5
         correct = (predictions == target_voiced) & valid
@@ -3357,15 +3876,19 @@ class GuidedSVSManager:
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         max_frames = int(target.shape[1])
         valid = (
-            (torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1))
-            & (target != PHONE_TO_ID["PAD"])
-        )
+            torch.arange(max_frames, device=lengths.device).unsqueeze(0)
+            < lengths.unsqueeze(1)
+        ) & (target != PHONE_TO_ID["PAD"])
         predictions = torch.argmax(logits, dim=-1)
         correct = ((predictions == target) & valid).to(dtype=logits.dtype)
-        phone_accuracy = correct.sum(dim=1) / valid.to(dtype=logits.dtype).sum(dim=1).clamp_min(1.0)
+        phone_accuracy = correct.sum(dim=1) / valid.to(dtype=logits.dtype).sum(
+            dim=1
+        ).clamp_min(1.0)
         lyric_valid = valid & (lyric_mask > 0.5) & (target != PHONE_TO_ID["SP"])
         lyric_correct = ((predictions == target) & lyric_valid).to(dtype=logits.dtype)
-        lyric_accuracy = lyric_correct.sum(dim=1) / lyric_valid.to(dtype=logits.dtype).sum(dim=1).clamp_min(1.0)
+        lyric_accuracy = lyric_correct.sum(dim=1) / lyric_valid.to(
+            dtype=logits.dtype
+        ).sum(dim=1).clamp_min(1.0)
         return phone_accuracy, lyric_accuracy
 
     def _vuv_accuracy_per_sample(
@@ -3375,11 +3898,15 @@ class GuidedSVSManager:
         lengths: torch.Tensor,
     ) -> torch.Tensor:
         max_frames = int(target.shape[1])
-        valid = torch.arange(max_frames, device=lengths.device).unsqueeze(0) < lengths.unsqueeze(1)
+        valid = torch.arange(max_frames, device=lengths.device).unsqueeze(
+            0
+        ) < lengths.unsqueeze(1)
         predictions = torch.sigmoid(logits) >= 0.5
         target_voiced = target >= 0.5
         correct = ((predictions == target_voiced) & valid).to(dtype=logits.dtype)
-        return correct.sum(dim=1) / valid.to(dtype=logits.dtype).sum(dim=1).clamp_min(1.0)
+        return correct.sum(dim=1) / valid.to(dtype=logits.dtype).sum(dim=1).clamp_min(
+            1.0
+        )
 
     def _voice_signature_losses(
         self,
@@ -3401,8 +3928,18 @@ class GuidedSVSManager:
             device=predicted_voice_signature.device,
             dtype=predicted_voice_signature.dtype,
         )
-        voice_loss = 1.0 - F.cosine_similarity(predicted_voice_signature, target_voice_signature, dim=-1).mean()
-        prototype_loss = 1.0 - F.cosine_similarity(predicted_voice_signature, voice_prototype, dim=-1).mean()
+        voice_loss = (
+            1.0
+            - F.cosine_similarity(
+                predicted_voice_signature, target_voice_signature, dim=-1
+            ).mean()
+        )
+        prototype_loss = (
+            1.0
+            - F.cosine_similarity(
+                predicted_voice_signature, voice_prototype, dim=-1
+            ).mean()
+        )
         return voice_loss, prototype_loss
 
     def _describe_quality_state(
@@ -3441,7 +3978,9 @@ class GuidedSVSManager:
             batch["mel"],
             batch["lengths"],
         )
-        f0_loss = self._masked_f0_loss(outputs["target_log_f0"], batch["target_log_f0"], batch["lengths"])
+        f0_loss = self._masked_f0_loss(
+            outputs["target_log_f0"], batch["target_log_f0"], batch["lengths"]
+        )
         delta_mel_loss = self._masked_delta_loss(
             outputs["mel"],
             batch["mel"],
@@ -3516,8 +4055,16 @@ class GuidedSVSManager:
             return [], {"name": "empty", "fraction": 0.0}
         if total_epochs <= 1:
             return all_entries, {"name": "full-diversity", "fraction": 1.0}
-        identity_entries = [entry for entry in all_entries if str(entry.get("slice_kind", "")) == "base-identity-window"]
-        paired_entries = [entry for entry in all_entries if str(entry.get("slice_kind", "")) != "base-identity-window"]
+        identity_entries = [
+            entry
+            for entry in all_entries
+            if str(entry.get("slice_kind", "")) == "base-identity-window"
+        ]
+        paired_entries = [
+            entry
+            for entry in all_entries
+            if str(entry.get("slice_kind", "")) != "base-identity-window"
+        ]
         paired_entries = sorted(
             paired_entries,
             key=lambda entry: (
@@ -3530,13 +4077,20 @@ class GuidedSVSManager:
         if epoch <= effective_warmup_end and effective_warmup_end > 0:
             fraction = 0.35
             phase_name = "warm-up"
-        elif epoch <= effective_bridge_end and effective_bridge_end > effective_warmup_end:
+        elif (
+            epoch <= effective_bridge_end
+            and effective_bridge_end > effective_warmup_end
+        ):
             fraction = 0.7
             phase_name = "curriculum-bridge"
         else:
             fraction = 1.0
             phase_name = "full-diversity"
-        keep_count = len(paired_entries) if fraction >= 0.999 else max(1, int(math.ceil(len(paired_entries) * fraction)))
+        keep_count = (
+            len(paired_entries)
+            if fraction >= 0.999
+            else max(1, int(math.ceil(len(paired_entries) * fraction)))
+        )
         selected = identity_entries + paired_entries[:keep_count]
         if not selected:
             selected = all_entries
@@ -3594,11 +4148,20 @@ class GuidedSVSManager:
             "bridge_end_epoch": int(bridge_end_epoch),
         }
 
-    def _instantiate_model(self, config: Optional[Dict[str, object]] = None) -> nn.Module:
+    def _instantiate_model(
+        self, config: Optional[Dict[str, object]] = None
+    ) -> nn.Module:
         config = dict(config or {})
         training_mode = str(config.get("training_mode", "") or "").strip().lower()
-        voice_signature_dim = int(config.get("voice_signature_dim", VOICE_SIGNATURE_DIM) or VOICE_SIGNATURE_DIM)
-        if bool(config.get("guide_conditioning", False)) or "paired" in training_mode or "persona" in training_mode:
+        voice_signature_dim = int(
+            config.get("voice_signature_dim", VOICE_SIGNATURE_DIM)
+            or VOICE_SIGNATURE_DIM
+        )
+        if (
+            bool(config.get("guide_conditioning", False))
+            or "paired" in training_mode
+            or "persona" in training_mode
+        ):
             model_config = dict(config.get("model", {}))
             return GuideConditionedMelRegenerator(
                 d_model=int(model_config.get("d_model", 256)),
@@ -3648,12 +4211,16 @@ class GuidedSVSManager:
             ),
         }
         if isinstance(base_model, GuideConditionedMelRegenerator):
-            kwargs["guide_mel"] = guide_mel if guide_mel is not None else torch.zeros(
-                phone_ids.shape[0],
-                phone_ids.shape[1],
-                N_MELS,
-                device=phone_ids.device,
-                dtype=log_f0.dtype,
+            kwargs["guide_mel"] = (
+                guide_mel
+                if guide_mel is not None
+                else torch.zeros(
+                    phone_ids.shape[0],
+                    phone_ids.shape[1],
+                    N_MELS,
+                    device=phone_ids.device,
+                    dtype=log_f0.dtype,
+                )
             )
             kwargs["lyric_mask"] = lyric_mask
         outputs = model(return_aux=True, **kwargs)
@@ -3717,7 +4284,9 @@ class GuidedSVSManager:
                 "config": dict(config),
                 "model_state": checkpoint_model.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
-                "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+                "scheduler_state": (
+                    scheduler.state_dict() if scheduler is not None else None
+                ),
             },
             path,
         )
@@ -3735,7 +4304,9 @@ class GuidedSVSManager:
         model.eval()
         return model, config
 
-    def _denormalize_log_mel(self, normalized_mel: np.ndarray, stats: Dict[str, object]) -> np.ndarray:
+    def _denormalize_log_mel(
+        self, normalized_mel: np.ndarray, stats: Dict[str, object]
+    ) -> np.ndarray:
         mel_mean = np.asarray(stats.get("mel_mean", [0.0] * N_MELS), dtype=np.float32)
         mel_std = np.asarray(stats.get("mel_std", [1.0] * N_MELS), dtype=np.float32)
         return (normalized_mel * mel_std[np.newaxis, :]) + mel_mean[np.newaxis, :]
@@ -3745,7 +4316,9 @@ class GuidedSVSManager:
             return 1
         gpu_memory_gb = 0.0
         try:
-            gpu_memory_gb = float(torch.cuda.get_device_properties(0).total_memory) / float(1024**3)
+            gpu_memory_gb = float(
+                torch.cuda.get_device_properties(0).total_memory
+            ) / float(1024**3)
         except Exception:
             gpu_memory_gb = 0.0
         if gpu_memory_gb >= 160.0:
@@ -3782,7 +4355,8 @@ class GuidedSVSManager:
                 device_type="cuda",
                 dtype=(
                     torch.bfloat16
-                    if hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
+                    if hasattr(torch.cuda, "is_bf16_supported")
+                    and torch.cuda.is_bf16_supported()
                     else torch.float16
                 ),
             )
@@ -3815,7 +4389,11 @@ class GuidedSVSManager:
         )
         vuv_accuracy = self._vuv_accuracy_per_sample(
             outputs["target_vuv_logits"],
-            search_batch["target_vuv"] if "target_vuv" in search_batch else search_batch["vuv"],
+            (
+                search_batch["target_vuv"]
+                if "target_vuv" in search_batch
+                else search_batch["vuv"]
+            ),
             search_batch["lengths"],
         )
         predicted_voice_signature = _compute_voice_signature_torch(
@@ -3841,16 +4419,33 @@ class GuidedSVSManager:
         best_index = int(torch.argmax(candidate_score).detach().cpu().item())
         best_length = int(search_batch["lengths"][best_index].detach().cpu().item())
         return (
-            outputs["mel"][best_index, :best_length].detach().float().cpu().numpy().astype(np.float32, copy=False),
+            outputs["mel"][best_index, :best_length]
+            .detach()
+            .float()
+            .cpu()
+            .numpy()
+            .astype(np.float32, copy=False),
             {
                 "candidate_count": int(candidate_count),
                 "best_index": int(best_index),
                 "best_score": float(candidate_score[best_index].detach().cpu().item()),
-                "best_voice_similarity": float(voice_similarity[best_index].detach().cpu().item()),
-                "best_lyric_phone_accuracy": float(lyric_phone_accuracy[best_index].detach().cpu().item()),
-                "best_phone_accuracy": float(phone_accuracy[best_index].detach().cpu().item()),
-                "best_vuv_accuracy": float(vuv_accuracy[best_index].detach().cpu().item()),
-                "search_mode": "mc-dropout-target-voice-rerank" if candidate_count > 1 else "deterministic-target-voice",
+                "best_voice_similarity": float(
+                    voice_similarity[best_index].detach().cpu().item()
+                ),
+                "best_lyric_phone_accuracy": float(
+                    lyric_phone_accuracy[best_index].detach().cpu().item()
+                ),
+                "best_phone_accuracy": float(
+                    phone_accuracy[best_index].detach().cpu().item()
+                ),
+                "best_vuv_accuracy": float(
+                    vuv_accuracy[best_index].detach().cpu().item()
+                ),
+                "search_mode": (
+                    "mc-dropout-target-voice-rerank"
+                    if candidate_count > 1
+                    else "deterministic-target-voice"
+                ),
             },
         )
 
@@ -3892,7 +4487,10 @@ class GuidedSVSManager:
             bundle=bundle,
         )
         target_audio, _ = self._render_audio_from_bundle(
-            normalized_mel=batch["mel"][0, : int(batch["lengths"][0].item())].detach().cpu().numpy(),
+            normalized_mel=batch["mel"][0, : int(batch["lengths"][0].item())]
+            .detach()
+            .cpu()
+            .numpy(),
             bundle=bundle,
         )
         preview_path = output_dir / "guided_regeneration_preview.wav"
@@ -3931,12 +4529,16 @@ class GuidedSVSManager:
         guide_audio, _ = librosa.load(str(guide_audio_path), sr=SAMPLE_RATE, mono=True)
         guide_audio = np.asarray(guide_audio, dtype=np.float32).reshape(-1)
         if guide_audio.size < max(HOP_LENGTH, 64):
-            raise RuntimeError("Guide phrase is too short for pronunciation blueprint synthesis.")
+            raise RuntimeError(
+                "Guide phrase is too short for pronunciation blueprint synthesis."
+            )
 
         guide_log_mel = self._extract_log_mel(guide_audio, SAMPLE_RATE)
         frame_count = int(guide_log_mel.shape[0])
         if frame_count <= 3:
-            raise RuntimeError("Guide phrase did not produce enough frames for regeneration.")
+            raise RuntimeError(
+                "Guide phrase did not produce enough frames for regeneration."
+            )
 
         duration_seconds = float(guide_audio.shape[0] / float(SAMPLE_RATE))
         normalized_word_scores = self._normalize_phrase_word_scores(
@@ -3971,26 +4573,44 @@ class GuidedSVSManager:
             norm_log_f0[voiced] = (
                 log_f0[voiced] - float(stats.get("log_f0_mean", 0.0))
             ) / log_f0_std
-        norm_guide_mel = (guide_log_mel - mel_mean[np.newaxis, :]) / mel_std[np.newaxis, :]
-        norm_energy = (
-            energy - float(stats.get("energy_mean", 0.0))
-        ) / float(_safe_std(float(stats.get("energy_std", 1.0))))
+        norm_guide_mel = (guide_log_mel - mel_mean[np.newaxis, :]) / mel_std[
+            np.newaxis, :
+        ]
+        norm_energy = (energy - float(stats.get("energy_mean", 0.0))) / float(
+            _safe_std(float(stats.get("energy_std", 1.0)))
+        )
 
         device = bundle["device"]
         model = bundle["model"]
         candidate_count = self._get_inference_candidate_count(device)
-        voice_prototype = torch.from_numpy(
-            _ensure_voice_signature_dim(bundle.get("voice_prototype", []))
-        ).unsqueeze(0).to(device=device, dtype=torch.float32)
+        voice_prototype = (
+            torch.from_numpy(
+                _ensure_voice_signature_dim(bundle.get("voice_prototype", []))
+            )
+            .unsqueeze(0)
+            .to(device=device, dtype=torch.float32)
+        )
         batch = {
-            "guide_mel": torch.from_numpy(norm_guide_mel.astype(np.float32, copy=False)).unsqueeze(0).to(device),
-            "phone_ids": torch.from_numpy(phone_ids.astype(np.int64, copy=False)).unsqueeze(0).to(device),
-            "log_f0": torch.from_numpy(norm_log_f0.astype(np.float32, copy=False)).unsqueeze(0).to(device),
-            "vuv": torch.from_numpy(vuv.astype(np.float32, copy=False)).unsqueeze(0).to(device),
-            "energy": torch.from_numpy(norm_energy.astype(np.float32, copy=False)).unsqueeze(0).to(device),
+            "guide_mel": torch.from_numpy(norm_guide_mel.astype(np.float32, copy=False))
+            .unsqueeze(0)
+            .to(device),
+            "phone_ids": torch.from_numpy(phone_ids.astype(np.int64, copy=False))
+            .unsqueeze(0)
+            .to(device),
+            "log_f0": torch.from_numpy(norm_log_f0.astype(np.float32, copy=False))
+            .unsqueeze(0)
+            .to(device),
+            "vuv": torch.from_numpy(vuv.astype(np.float32, copy=False))
+            .unsqueeze(0)
+            .to(device),
+            "energy": torch.from_numpy(norm_energy.astype(np.float32, copy=False))
+            .unsqueeze(0)
+            .to(device),
             "voice_prototype": voice_prototype,
             "lyric_mask": (
-                torch.from_numpy((phone_ids != PHONE_TO_ID["SP"]).astype(np.float32, copy=False))
+                torch.from_numpy(
+                    (phone_ids != PHONE_TO_ID["SP"]).astype(np.float32, copy=False)
+                )
                 .unsqueeze(0)
                 .to(device)
             ),
@@ -4009,15 +4629,21 @@ class GuidedSVSManager:
         source_rms = float(np.sqrt(np.mean(np.square(guide_audio)) + 1e-9))
         generated_rms = float(np.sqrt(np.mean(np.square(generated_audio)) + 1e-9))
         if generated_rms > 1e-7:
-            generated_audio = generated_audio * np.float32(np.clip(source_rms / generated_rms, 0.78, 1.32))
-        stereo_audio = np.repeat(generated_audio[:, np.newaxis], 2, axis=1).astype(np.float32, copy=False)
+            generated_audio = generated_audio * np.float32(
+                np.clip(source_rms / generated_rms, 0.78, 1.32)
+            )
+        stereo_audio = np.repeat(generated_audio[:, np.newaxis], 2, axis=1).astype(
+            np.float32, copy=False
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         sf.write(output_path, stereo_audio, SAMPLE_RATE, subtype="PCM_24")
         return {
             "output_path": str(output_path),
             "sample_rate": SAMPLE_RATE,
             "frame_count": frame_count,
-            "duration_seconds": round(float(generated_audio.shape[0] / float(SAMPLE_RATE)), 3),
+            "duration_seconds": round(
+                float(generated_audio.shape[0] / float(SAMPLE_RATE)), 3
+            ),
             "phone_coverage": round(float(coverage), 4),
             "stats_path": str(bundle["stats_path"]),
             "checkpoint_path": str(bundle["checkpoint_path"]),
@@ -4051,13 +4677,17 @@ class GuidedSVSManager:
         guide_audio, _ = librosa.load(str(guide_audio_path), sr=SAMPLE_RATE, mono=True)
         guide_audio = np.asarray(guide_audio, dtype=np.float32).reshape(-1)
         if guide_audio.size < max(HOP_LENGTH * 8, 512):
-            raise RuntimeError("Guide vocal is too short for full blueprint conversion.")
+            raise RuntimeError(
+                "Guide vocal is too short for full blueprint conversion."
+            )
 
         started = time.perf_counter()
         guide_log_mel = self._extract_log_mel(guide_audio, SAMPLE_RATE)
         frame_count = int(guide_log_mel.shape[0])
         if frame_count <= 8:
-            raise RuntimeError("Guide vocal did not produce enough frames for full conversion.")
+            raise RuntimeError(
+                "Guide vocal did not produce enough frames for full conversion."
+            )
 
         duration_seconds = float(guide_audio.shape[0] / float(SAMPLE_RATE))
         normalized_word_scores = self._normalize_phrase_word_scores(
@@ -4092,18 +4722,24 @@ class GuidedSVSManager:
             norm_log_f0[voiced] = (
                 log_f0[voiced] - float(stats.get("log_f0_mean", 0.0))
             ) / log_f0_std
-        norm_guide_mel = (guide_log_mel - mel_mean[np.newaxis, :]) / mel_std[np.newaxis, :]
-        norm_energy = (
-            energy - float(stats.get("energy_mean", 0.0))
-        ) / float(_safe_std(float(stats.get("energy_std", 1.0))))
+        norm_guide_mel = (guide_log_mel - mel_mean[np.newaxis, :]) / mel_std[
+            np.newaxis, :
+        ]
+        norm_energy = (energy - float(stats.get("energy_mean", 0.0))) / float(
+            _safe_std(float(stats.get("energy_std", 1.0)))
+        )
 
         device = bundle["device"]
         model = bundle["model"]
         config = dict(bundle["config"])
         candidate_count = self._get_inference_candidate_count(device)
-        voice_prototype = torch.from_numpy(
-            _ensure_voice_signature_dim(bundle.get("voice_prototype", []))
-        ).unsqueeze(0).to(device=device, dtype=torch.float32)
+        voice_prototype = (
+            torch.from_numpy(
+                _ensure_voice_signature_dim(bundle.get("voice_prototype", []))
+            )
+            .unsqueeze(0)
+            .to(device=device, dtype=torch.float32)
+        )
         chunk_frames = max(120, int(config.get("max_frames", 240) or 240))
         overlap_frames = min(max(24, chunk_frames // 6), max(24, chunk_frames - 16))
         if frame_count <= chunk_frames:
@@ -4129,16 +4765,34 @@ class GuidedSVSManager:
             batch = {
                 "guide_mel": torch.from_numpy(
                     norm_guide_mel[start_frame:end_frame].astype(np.float32, copy=False)
-                ).unsqueeze(0).to(device),
-                "phone_ids": torch.from_numpy(local_phone_ids.astype(np.int64, copy=False)).unsqueeze(0).to(device),
-                "log_f0": torch.from_numpy(local_log_f0.astype(np.float32, copy=False)).unsqueeze(0).to(device),
-                "vuv": torch.from_numpy(local_vuv.astype(np.float32, copy=False)).unsqueeze(0).to(device),
-                "energy": torch.from_numpy(local_energy.astype(np.float32, copy=False)).unsqueeze(0).to(device),
+                )
+                .unsqueeze(0)
+                .to(device),
+                "phone_ids": torch.from_numpy(
+                    local_phone_ids.astype(np.int64, copy=False)
+                )
+                .unsqueeze(0)
+                .to(device),
+                "log_f0": torch.from_numpy(local_log_f0.astype(np.float32, copy=False))
+                .unsqueeze(0)
+                .to(device),
+                "vuv": torch.from_numpy(local_vuv.astype(np.float32, copy=False))
+                .unsqueeze(0)
+                .to(device),
+                "energy": torch.from_numpy(local_energy.astype(np.float32, copy=False))
+                .unsqueeze(0)
+                .to(device),
                 "voice_prototype": voice_prototype,
                 "lyric_mask": torch.from_numpy(
-                    (local_phone_ids != PHONE_TO_ID["SP"]).astype(np.float32, copy=False)
-                ).unsqueeze(0).to(device),
-                "lengths": torch.tensor([local_length], dtype=torch.long, device=device),
+                    (local_phone_ids != PHONE_TO_ID["SP"]).astype(
+                        np.float32, copy=False
+                    )
+                )
+                .unsqueeze(0)
+                .to(device),
+                "lengths": torch.tensor(
+                    [local_length], dtype=torch.long, device=device
+                ),
             }
             predicted_chunk, candidate_metadata = self._run_inference_candidate_search(
                 model=model,
@@ -4146,13 +4800,19 @@ class GuidedSVSManager:
                 candidate_count=candidate_count,
             )
             chunk_scores.append(float(candidate_metadata.get("best_score", 0.0)))
-            chunk_voice_similarity.append(float(candidate_metadata.get("best_voice_similarity", 0.0)))
+            chunk_voice_similarity.append(
+                float(candidate_metadata.get("best_voice_similarity", 0.0))
+            )
 
             weights = np.ones((local_length, 1), dtype=np.float32)
             if overlap_frames > 1 and local_length > 2:
                 fade_length = min(overlap_frames, max(2, local_length // 3))
-                fade_in = np.linspace(0.0, 1.0, num=fade_length, dtype=np.float32).reshape(-1, 1)
-                fade_out = np.linspace(1.0, 0.0, num=fade_length, dtype=np.float32).reshape(-1, 1)
+                fade_in = np.linspace(
+                    0.0, 1.0, num=fade_length, dtype=np.float32
+                ).reshape(-1, 1)
+                fade_out = np.linspace(
+                    1.0, 0.0, num=fade_length, dtype=np.float32
+                ).reshape(-1, 1)
                 if start_frame > 0:
                     weights[:fade_length] *= fade_in
                 if end_frame < frame_count:
@@ -4170,9 +4830,13 @@ class GuidedSVSManager:
         guide_rms = float(np.sqrt(np.mean(np.square(guide_audio)) + 1e-9))
         generated_rms = float(np.sqrt(np.mean(np.square(generated_audio)) + 1e-9))
         if generated_rms > 1e-7:
-            generated_audio = generated_audio * np.float32(np.clip(guide_rms / generated_rms, 0.76, 1.28))
+            generated_audio = generated_audio * np.float32(
+                np.clip(guide_rms / generated_rms, 0.76, 1.28)
+            )
 
-        stereo_audio = np.repeat(generated_audio[:, np.newaxis], 2, axis=1).astype(np.float32, copy=False)
+        stereo_audio = np.repeat(generated_audio[:, np.newaxis], 2, axis=1).astype(
+            np.float32, copy=False
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         sf.write(output_path, stereo_audio, SAMPLE_RATE, subtype="PCM_24")
         elapsed = float(time.perf_counter() - started)
@@ -4180,7 +4844,9 @@ class GuidedSVSManager:
             "output_path": str(output_path),
             "sample_rate": SAMPLE_RATE,
             "frame_count": frame_count,
-            "duration_seconds": round(float(generated_audio.shape[0] / float(SAMPLE_RATE)), 3),
+            "duration_seconds": round(
+                float(generated_audio.shape[0] / float(SAMPLE_RATE)), 3
+            ),
             "phone_coverage": round(float(coverage), 4),
             "stats_path": str(bundle["stats_path"]),
             "checkpoint_path": str(bundle["checkpoint_path"]),
@@ -4189,9 +4855,22 @@ class GuidedSVSManager:
             "overlap_frames": int(overlap_frames),
             "synthesis_seconds": round(elapsed, 3),
             "candidate_count": int(candidate_count),
-            "mean_chunk_score": round(float(np.mean(chunk_scores)) if chunk_scores else 0.0, 4),
-            "mean_chunk_voice_similarity": round(float(np.mean(chunk_voice_similarity)) if chunk_voice_similarity else 0.0, 4),
-            "search_mode": "mc-dropout-target-voice-rerank" if candidate_count > 1 else "deterministic-target-voice",
+            "mean_chunk_score": round(
+                float(np.mean(chunk_scores)) if chunk_scores else 0.0, 4
+            ),
+            "mean_chunk_voice_similarity": round(
+                (
+                    float(np.mean(chunk_voice_similarity))
+                    if chunk_voice_similarity
+                    else 0.0
+                ),
+                4,
+            ),
+            "search_mode": (
+                "mc-dropout-target-voice-rerank"
+                if candidate_count > 1
+                else "deterministic-target-voice"
+            ),
             "render_mode": render_mode,
         }
 
@@ -4269,7 +4948,11 @@ class GuidedSVSManager:
         ).to(device)
         discriminator: nn.Module = MultiScaleWaveDiscriminator().to(device)
         compiled = False
-        if device.type == "cuda" and bool(config.get("compile_model", False)) and hasattr(torch, "compile"):
+        if (
+            device.type == "cuda"
+            and bool(config.get("compile_model", False))
+            and hasattr(torch, "compile")
+        ):
             try:
                 generator = torch.compile(generator, mode="reduce-overhead")
                 discriminator = torch.compile(discriminator, mode="reduce-overhead")
@@ -4286,11 +4969,15 @@ class GuidedSVSManager:
             optimizer_kwargs["fused"] = True
         try:
             optimizer_g = torch.optim.AdamW(generator.parameters(), **optimizer_kwargs)
-            optimizer_d = torch.optim.AdamW(discriminator.parameters(), **optimizer_kwargs)
+            optimizer_d = torch.optim.AdamW(
+                discriminator.parameters(), **optimizer_kwargs
+            )
         except TypeError:
             optimizer_kwargs.pop("fused", None)
             optimizer_g = torch.optim.AdamW(generator.parameters(), **optimizer_kwargs)
-            optimizer_d = torch.optim.AdamW(discriminator.parameters(), **optimizer_kwargs)
+            optimizer_d = torch.optim.AdamW(
+                discriminator.parameters(), **optimizer_kwargs
+            )
 
         warmup_epochs = max(4, int(round(int(config["total_epochs"]) * 0.08)))
 
@@ -4298,13 +4985,21 @@ class GuidedSVSManager:
             epoch_number = epoch_index + 1
             if epoch_number <= warmup_epochs:
                 return max(0.25, epoch_number / float(max(warmup_epochs, 1)))
-            progress = (epoch_number - warmup_epochs) / float(max(int(config["total_epochs"]) - warmup_epochs, 1))
+            progress = (epoch_number - warmup_epochs) / float(
+                max(int(config["total_epochs"]) - warmup_epochs, 1)
+            )
             cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
             return max(0.08, 0.08 + (0.92 * cosine))
 
-        scheduler_g = torch.optim.lr_scheduler.LambdaLR(optimizer_g, lr_lambda=vocoder_lr_lambda)
-        scheduler_d = torch.optim.lr_scheduler.LambdaLR(optimizer_d, lr_lambda=vocoder_lr_lambda)
-        scaler = torch.cuda.amp.GradScaler(enabled=bool(device.type == "cuda" and use_grad_scaler))
+        scheduler_g = torch.optim.lr_scheduler.LambdaLR(
+            optimizer_g, lr_lambda=vocoder_lr_lambda
+        )
+        scheduler_d = torch.optim.lr_scheduler.LambdaLR(
+            optimizer_d, lr_lambda=vocoder_lr_lambda
+        )
+        scaler = torch.cuda.amp.GradScaler(
+            enabled=bool(device.type == "cuda" and use_grad_scaler)
+        )
 
         best_checkpoint_path = output_dir / "guided_vocoder_best.pt"
         latest_checkpoint_path = output_dir / "guided_vocoder_latest.pt"
@@ -4331,7 +5026,9 @@ class GuidedSVSManager:
         loader_safe_mode = False
 
         for epoch in range(1, int(config["total_epochs"]) + 1):
-            if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+            if cancel_event is not None and bool(
+                getattr(cancel_event, "is_set", lambda: False)()
+            ):
                 stopped_early = True
                 break
             while True:
@@ -4349,8 +5046,14 @@ class GuidedSVSManager:
                     train_batches = 0
                     train_samples = 0
                     epoch_started = time.time()
-                    active_worker_count = 0 if loader_safe_mode else int(profile.get("num_workers", 0))
-                    active_prefetch_factor = 2 if loader_safe_mode else int(profile.get("prefetch_factor", 2))
+                    active_worker_count = (
+                        0 if loader_safe_mode else int(profile.get("num_workers", 0))
+                    )
+                    active_prefetch_factor = (
+                        2
+                        if loader_safe_mode
+                        else int(profile.get("prefetch_factor", 2))
+                    )
                     if loader_safe_mode:
                         train_loader = self._create_vocoder_loader(
                             entries=train_entries,
@@ -4375,14 +5078,19 @@ class GuidedSVSManager:
                             shuffle=False,
                         )
                     for batch in train_loader:
-                        if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+                        if cancel_event is not None and bool(
+                            getattr(cancel_event, "is_set", lambda: False)()
+                        ):
                             stopped_early = True
                             break
                         batch = {key: value.to(device) for key, value in batch.items()}
-                        real_audio = _mask_audio_by_lengths(batch["audio"], batch["sample_lengths"])
+                        real_audio = _mask_audio_by_lengths(
+                            batch["audio"], batch["sample_lengths"]
+                        )
                         autocast_context = (
                             torch.autocast(device_type="cuda", dtype=autocast_dtype)
-                            if device.type == "cuda" and precision_mode in {"bf16", "fp16"}
+                            if device.type == "cuda"
+                            and precision_mode in {"bf16", "fp16"}
                             else nullcontext()
                         )
 
@@ -4390,7 +5098,9 @@ class GuidedSVSManager:
                             parameter.requires_grad_(True)
                         optimizer_d.zero_grad(set_to_none=True)
                         with autocast_context:
-                            fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
+                            fake_audio = _mask_audio_by_lengths(
+                                generator(batch["mel"]), batch["sample_lengths"]
+                            )
                             discriminator_loss = self._vocoder_discriminator_hinge_loss(
                                 discriminator,
                                 real_audio=real_audio,
@@ -4408,13 +5118,21 @@ class GuidedSVSManager:
                             parameter.requires_grad_(False)
                         optimizer_g.zero_grad(set_to_none=True)
                         with autocast_context:
-                            fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
-                            wave_loss = self._masked_wave_l1_loss(fake_audio, real_audio, batch["sample_lengths"])
-                            stft_loss = self._multi_resolution_wave_stft_loss(fake_audio, real_audio, batch["sample_lengths"])
-                            adv_loss, feature_matching_loss = self._vocoder_generator_losses(
-                                discriminator,
-                                real_audio=real_audio,
-                                fake_audio=fake_audio,
+                            fake_audio = _mask_audio_by_lengths(
+                                generator(batch["mel"]), batch["sample_lengths"]
+                            )
+                            wave_loss = self._masked_wave_l1_loss(
+                                fake_audio, real_audio, batch["sample_lengths"]
+                            )
+                            stft_loss = self._multi_resolution_wave_stft_loss(
+                                fake_audio, real_audio, batch["sample_lengths"]
+                            )
+                            adv_loss, feature_matching_loss = (
+                                self._vocoder_generator_losses(
+                                    discriminator,
+                                    real_audio=real_audio,
+                                    fake_audio=fake_audio,
+                                )
                             )
                             generator_total = (
                                 wave_loss
@@ -4432,12 +5150,18 @@ class GuidedSVSManager:
                         for parameter in discriminator.parameters():
                             parameter.requires_grad_(True)
 
-                        train_sums["generator_total"] += float(generator_total.detach().cpu().item())
+                        train_sums["generator_total"] += float(
+                            generator_total.detach().cpu().item()
+                        )
                         train_sums["wave"] += float(wave_loss.detach().cpu().item())
                         train_sums["stft"] += float(stft_loss.detach().cpu().item())
                         train_sums["adv"] += float(adv_loss.detach().cpu().item())
-                        train_sums["feature_matching"] += float(feature_matching_loss.detach().cpu().item())
-                        train_sums["discriminator"] += float(discriminator_loss.detach().cpu().item())
+                        train_sums["feature_matching"] += float(
+                            feature_matching_loss.detach().cpu().item()
+                        )
+                        train_sums["discriminator"] += float(
+                            discriminator_loss.detach().cpu().item()
+                        )
                         train_batches += 1
                         train_samples += int(batch["sample_lengths"].shape[0])
 
@@ -4451,13 +5175,25 @@ class GuidedSVSManager:
                     val_batches = 0
                     with torch.no_grad():
                         for batch in val_loader:
-                            batch = {key: value.to(device) for key, value in batch.items()}
-                            real_audio = _mask_audio_by_lengths(batch["audio"], batch["sample_lengths"])
-                            fake_audio = _mask_audio_by_lengths(generator(batch["mel"]), batch["sample_lengths"])
-                            wave_loss = self._masked_wave_l1_loss(fake_audio, real_audio, batch["sample_lengths"])
-                            stft_loss = self._multi_resolution_wave_stft_loss(fake_audio, real_audio, batch["sample_lengths"])
+                            batch = {
+                                key: value.to(device) for key, value in batch.items()
+                            }
+                            real_audio = _mask_audio_by_lengths(
+                                batch["audio"], batch["sample_lengths"]
+                            )
+                            fake_audio = _mask_audio_by_lengths(
+                                generator(batch["mel"]), batch["sample_lengths"]
+                            )
+                            wave_loss = self._masked_wave_l1_loss(
+                                fake_audio, real_audio, batch["sample_lengths"]
+                            )
+                            stft_loss = self._multi_resolution_wave_stft_loss(
+                                fake_audio, real_audio, batch["sample_lengths"]
+                            )
                             generator_total = wave_loss + (0.8 * stft_loss)
-                            val_sums["generator_total"] += float(generator_total.detach().cpu().item())
+                            val_sums["generator_total"] += float(
+                                generator_total.detach().cpu().item()
+                            )
                             val_sums["wave"] += float(wave_loss.detach().cpu().item())
                             val_sums["stft"] += float(stft_loss.detach().cpu().item())
                             val_batches += 1
@@ -4490,11 +5226,17 @@ class GuidedSVSManager:
             scheduler_d.step()
             epoch_seconds = max(time.time() - epoch_started, 1e-6)
             samples_per_second = float(train_samples) / epoch_seconds
-            epochs_since_best = max(0, epoch - max(best_epoch, epoch if improved else 0))
+            epochs_since_best = max(
+                0, epoch - max(best_epoch, epoch if improved else 0)
+            )
             quality_state = (
                 "new best"
                 if improved
-                else ("still sharpening transients" if val_stft > 0.8 else ("locking realism" if epochs_since_best < 10 else "plateauing"))
+                else (
+                    "still sharpening transients"
+                    if val_stft > 0.8
+                    else ("locking realism" if epochs_since_best < 10 else "plateauing")
+                )
             )
             history.append(
                 {
@@ -4503,8 +5245,12 @@ class GuidedSVSManager:
                     "train_wave": round(train_sums["wave"] / max(train_batches, 1), 6),
                     "train_stft": round(train_sums["stft"] / max(train_batches, 1), 6),
                     "train_adv": round(train_sums["adv"] / max(train_batches, 1), 6),
-                    "train_feature_matching": round(train_sums["feature_matching"] / max(train_batches, 1), 6),
-                    "train_discriminator": round(train_sums["discriminator"] / max(train_batches, 1), 6),
+                    "train_feature_matching": round(
+                        train_sums["feature_matching"] / max(train_batches, 1), 6
+                    ),
+                    "train_discriminator": round(
+                        train_sums["discriminator"] / max(train_batches, 1), 6
+                    ),
                     "val_generator_total": round(val_total, 6),
                     "val_wave": round(val_wave, 6),
                     "val_stft": round(val_stft, 6),
@@ -4513,7 +5259,9 @@ class GuidedSVSManager:
                     "epochs_since_best": int(epochs_since_best),
                     "quality_state": quality_state,
                     "samples_per_second": round(samples_per_second, 2),
-                    "learning_rate": round(float(optimizer_g.param_groups[0]["lr"]), 10),
+                    "learning_rate": round(
+                        float(optimizer_g.param_groups[0]["lr"]), 10
+                    ),
                     "elapsed_seconds": round(max(time.time() - start_time, 0.0), 2),
                 }
             )
@@ -4540,7 +5288,11 @@ class GuidedSVSManager:
                     config=config,
                 )
 
-            progress = min(96, 84 + int(round((epoch / float(max(int(config["total_epochs"]), 1))) * 12)))
+            progress = min(
+                96,
+                84
+                + int(round((epoch / float(max(int(config["total_epochs"]), 1))) * 12)),
+            )
             update_status(
                 "guided-vocoder-train",
                 f"Neural vocoder epoch {epoch}/{int(config['total_epochs'])} | {quality_state}",
@@ -4559,13 +5311,19 @@ class GuidedSVSManager:
 
         if not latest_checkpoint_path.exists():
             if stopped_early:
-                raise InterruptedError("Vocoder training stopped before the first neural decoder checkpoint was written.")
+                raise InterruptedError(
+                    "Vocoder training stopped before the first neural decoder checkpoint was written."
+                )
             raise RuntimeError("Neural vocoder training never wrote a checkpoint.")
 
         history_path = output_dir / "guided_vocoder_history.json"
         history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
         report_payload = {
-            "checkpoint_path": str(best_checkpoint_path if best_checkpoint_path.exists() else latest_checkpoint_path),
+            "checkpoint_path": str(
+                best_checkpoint_path
+                if best_checkpoint_path.exists()
+                else latest_checkpoint_path
+            ),
             "latest_checkpoint_path": str(latest_checkpoint_path),
             "history_path": str(history_path),
             "config_path": str(config_path),
@@ -4579,7 +5337,11 @@ class GuidedSVSManager:
         report_path = output_dir / "guided_vocoder_report.json"
         report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
         return {
-            "checkpoint_path": str(best_checkpoint_path if best_checkpoint_path.exists() else latest_checkpoint_path),
+            "checkpoint_path": str(
+                best_checkpoint_path
+                if best_checkpoint_path.exists()
+                else latest_checkpoint_path
+            ),
             "latest_checkpoint_path": str(latest_checkpoint_path),
             "history_path": str(history_path),
             "config_path": str(config_path),
@@ -4616,12 +5378,14 @@ class GuidedSVSManager:
         prefetch_factor = int(hardware_profile.get("prefetch_factor", 2))
         requested_run_epochs = max(1, int(total_epochs))
         normalized_start_phase = self._normalize_curriculum_phase(start_phase)
-        train_loader, val_loader, stats, train_entries, val_entries, filter_metadata = self._build_loaders(
-            dataset_dir=dataset_dir,
-            max_frames=max_frames,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            prefetch_factor=prefetch_factor,
+        train_loader, val_loader, stats, train_entries, val_entries, filter_metadata = (
+            self._build_loaders(
+                dataset_dir=dataset_dir,
+                max_frames=max_frames,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                prefetch_factor=prefetch_factor,
+            )
         )
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         precision_mode = str(hardware_profile.get("precision_mode", "fp32"))
@@ -4629,11 +5393,17 @@ class GuidedSVSManager:
         use_grad_scaler = False
         resume_checkpoint: Dict[str, object] = {}
         resume_epoch = 0
-        resolved_resume_checkpoint = Path(str(resume_checkpoint_path)) if resume_checkpoint_path else None
+        resolved_resume_checkpoint = (
+            Path(str(resume_checkpoint_path)) if resume_checkpoint_path else None
+        )
         if resolved_resume_checkpoint is not None:
             if not resolved_resume_checkpoint.exists():
-                raise FileNotFoundError(f"Resume checkpoint was not found: {resolved_resume_checkpoint}")
-            resume_checkpoint = torch.load(resolved_resume_checkpoint, map_location="cpu")
+                raise FileNotFoundError(
+                    f"Resume checkpoint was not found: {resolved_resume_checkpoint}"
+                )
+            resume_checkpoint = torch.load(
+                resolved_resume_checkpoint, map_location="cpu"
+            )
             resume_epoch = max(0, int(resume_checkpoint.get("epoch", 0)))
         curriculum_schedule = self._resolve_curriculum_schedule(
             start_phase=normalized_start_phase,
@@ -4697,7 +5467,9 @@ class GuidedSVSManager:
                 ],
                 "warmup_stage_epochs": int(curriculum_schedule["warmup_stage_epochs"]),
                 "bridge_stage_epochs": int(curriculum_schedule["bridge_stage_epochs"]),
-                "full_diversity_stage_epochs": int(curriculum_schedule["full_diversity_stage_epochs"]),
+                "full_diversity_stage_epochs": int(
+                    curriculum_schedule["full_diversity_stage_epochs"]
+                ),
                 "anchor_epoch": int(curriculum_schedule["anchor_epoch"]),
                 "warmup_end_epoch": int(warmup_end_epoch),
                 "bridge_end_epoch": int(bridge_end_epoch),
@@ -4728,7 +5500,9 @@ class GuidedSVSManager:
                     "prefetch_factor": int(prefetch_factor),
                     "gpu_memory_gb": float(hardware_profile.get("gpu_memory_gb", 0.0)),
                     "precision_mode": precision_mode,
-                    "fused_optimizer": bool(hardware_profile.get("use_fused_adamw", False)),
+                    "fused_optimizer": bool(
+                        hardware_profile.get("use_fused_adamw", False)
+                    ),
                     "pair_filtering": dict(filter_metadata),
                 }
             )
@@ -4736,9 +5510,15 @@ class GuidedSVSManager:
             merged_curriculum.update(
                 {
                     "enabled": True,
-                    "warmup_stage_epochs": int(curriculum_schedule["warmup_stage_epochs"]),
-                    "bridge_stage_epochs": int(curriculum_schedule["bridge_stage_epochs"]),
-                    "full_diversity_stage_epochs": int(curriculum_schedule["full_diversity_stage_epochs"]),
+                    "warmup_stage_epochs": int(
+                        curriculum_schedule["warmup_stage_epochs"]
+                    ),
+                    "bridge_stage_epochs": int(
+                        curriculum_schedule["bridge_stage_epochs"]
+                    ),
+                    "full_diversity_stage_epochs": int(
+                        curriculum_schedule["full_diversity_stage_epochs"]
+                    ),
                     "anchor_epoch": int(curriculum_schedule["anchor_epoch"]),
                     "warmup_end_epoch": int(warmup_end_epoch),
                     "bridge_end_epoch": int(bridge_end_epoch),
@@ -4749,7 +5529,11 @@ class GuidedSVSManager:
             config = merged_config
         model = self._instantiate_model(config).to(device)
         compiled_model = False
-        if device.type == "cuda" and bool(hardware_profile.get("compile_model", False)) and hasattr(torch, "compile"):
+        if (
+            device.type == "cuda"
+            and bool(hardware_profile.get("compile_model", False))
+            and hasattr(torch, "compile")
+        ):
             try:
                 model = torch.compile(model, mode="reduce-overhead")
                 compiled_model = True
@@ -4760,15 +5544,22 @@ class GuidedSVSManager:
             "betas": (0.9, 0.99),
             "weight_decay": 1e-4,
         }
-        if device.type == "cuda" and bool(hardware_profile.get("use_fused_adamw", False)):
+        if device.type == "cuda" and bool(
+            hardware_profile.get("use_fused_adamw", False)
+        ):
             optimizer_kwargs["fused"] = True
         try:
             optimizer = torch.optim.AdamW(model.parameters(), **optimizer_kwargs)
         except TypeError:
             optimizer_kwargs.pop("fused", None)
             optimizer = torch.optim.AdamW(model.parameters(), **optimizer_kwargs)
-        lr_warmup_epochs = max(4, min(120, int(round(max(requested_run_epochs, 1) * 0.05))))
-        if normalized_start_phase in {"curriculum-bridge", "full-diversity"} or resume_epoch >= warmup_end_epoch:
+        lr_warmup_epochs = max(
+            4, min(120, int(round(max(requested_run_epochs, 1) * 0.05)))
+        )
+        if (
+            normalized_start_phase in {"curriculum-bridge", "full-diversity"}
+            or resume_epoch >= warmup_end_epoch
+        ):
             lr_warmup_epochs = 0
         min_lr_scale = 0.12
 
@@ -4776,17 +5567,25 @@ class GuidedSVSManager:
             epoch_number = epoch_index + 1
             if lr_warmup_epochs > 0 and epoch_number <= lr_warmup_epochs:
                 return max(0.35, epoch_number / float(max(lr_warmup_epochs, 1)))
-            progress = (epoch_number - lr_warmup_epochs) / float(max(requested_run_epochs - lr_warmup_epochs, 1))
+            progress = (epoch_number - lr_warmup_epochs) / float(
+                max(requested_run_epochs - lr_warmup_epochs, 1)
+            )
             cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
             return max(min_lr_scale, min_lr_scale + ((1.0 - min_lr_scale) * cosine))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-        scaler = torch.cuda.amp.GradScaler(enabled=bool(device.type == "cuda" and use_grad_scaler))
+        scaler = torch.cuda.amp.GradScaler(
+            enabled=bool(device.type == "cuda" and use_grad_scaler)
+        )
         resume_report_payload: Dict[str, object] = {}
-        resolved_resume_report = Path(str(resume_report_path)) if resume_report_path else None
+        resolved_resume_report = (
+            Path(str(resume_report_path)) if resume_report_path else None
+        )
         if resolved_resume_report is not None and resolved_resume_report.exists():
             try:
-                loaded_report = json.loads(resolved_resume_report.read_text(encoding="utf-8"))
+                loaded_report = json.loads(
+                    resolved_resume_report.read_text(encoding="utf-8")
+                )
                 if isinstance(loaded_report, dict):
                     resume_report_payload = loaded_report
             except Exception:
@@ -4796,22 +5595,50 @@ class GuidedSVSManager:
 
         history: List[Dict[str, object]] = []
         if resolved_resume_checkpoint is not None:
-            resume_history_path = resolved_resume_checkpoint.parent / "guided_regeneration_history.json"
+            resume_history_path = (
+                resolved_resume_checkpoint.parent / "guided_regeneration_history.json"
+            )
             if resume_history_path.exists():
                 try:
-                    loaded_history = json.loads(resume_history_path.read_text(encoding="utf-8"))
+                    loaded_history = json.loads(
+                        resume_history_path.read_text(encoding="utf-8")
+                    )
                     if isinstance(loaded_history, list):
-                        history = [dict(entry) for entry in loaded_history if isinstance(entry, dict)]
+                        history = [
+                            dict(entry)
+                            for entry in loaded_history
+                            if isinstance(entry, dict)
+                        ]
                 except Exception:
                     history = []
-        best_val_loss = float(resume_checkpoint.get("best_val_loss", resume_report_payload.get("best_val_total", float("inf"))))
-        best_val_mel = float(resume_report_payload.get("best_val_l1", best_val_loss if math.isfinite(best_val_loss) else float("inf")))
-        best_epoch = int(resume_report_payload.get("best_epoch", resume_epoch if resume_epoch > 0 else 0))
-        best_phone_accuracy = float(resume_report_payload.get("best_phone_accuracy", 0.0))
-        best_lyric_phone_accuracy = float(resume_report_payload.get("best_lyric_phone_accuracy", 0.0))
+        best_val_loss = float(
+            resume_checkpoint.get(
+                "best_val_loss",
+                resume_report_payload.get("best_val_total", float("inf")),
+            )
+        )
+        best_val_mel = float(
+            resume_report_payload.get(
+                "best_val_l1",
+                best_val_loss if math.isfinite(best_val_loss) else float("inf"),
+            )
+        )
+        best_epoch = int(
+            resume_report_payload.get(
+                "best_epoch", resume_epoch if resume_epoch > 0 else 0
+            )
+        )
+        best_phone_accuracy = float(
+            resume_report_payload.get("best_phone_accuracy", 0.0)
+        )
+        best_lyric_phone_accuracy = float(
+            resume_report_payload.get("best_lyric_phone_accuracy", 0.0)
+        )
         best_vuv_accuracy = float(resume_report_payload.get("best_vuv_accuracy", 0.0))
         if resume_checkpoint:
-            model.load_state_dict(dict(resume_checkpoint.get("model_state", {})), strict=False)
+            model.load_state_dict(
+                dict(resume_checkpoint.get("model_state", {})), strict=False
+            )
             optimizer_state = resume_checkpoint.get("optimizer_state")
             if isinstance(optimizer_state, dict):
                 try:
@@ -4821,7 +5648,9 @@ class GuidedSVSManager:
         best_checkpoint_path = output_dir / "guided_regeneration_best.pt"
         latest_checkpoint_path = output_dir / "guided_regeneration_latest.pt"
         stopped_early = False
-        last_epoch = max(resume_epoch, int(resume_report_payload.get("last_epoch", resume_epoch)))
+        last_epoch = max(
+            resume_epoch, int(resume_report_payload.get("last_epoch", resume_epoch))
+        )
         start_time = time.time()
         hardware_summary = (
             f"{device.type} | {float(hardware_profile.get('gpu_memory_gb', 0.0)):.1f}GB | "
@@ -4855,7 +5684,9 @@ class GuidedSVSManager:
         )
 
         for epoch in range(max(1, resume_epoch + 1), max(1, target_end_epoch) + 1):
-            if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+            if cancel_event is not None and bool(
+                getattr(cancel_event, "is_set", lambda: False)()
+            ):
                 stopped_early = True
                 break
 
@@ -4931,14 +5762,17 @@ class GuidedSVSManager:
                 epoch_started = time.time()
                 try:
                     for batch in train_loader:
-                        if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+                        if cancel_event is not None and bool(
+                            getattr(cancel_event, "is_set", lambda: False)()
+                        ):
                             stopped_early = True
                             break
                         batch = {key: value.to(device) for key, value in batch.items()}
                         optimizer.zero_grad(set_to_none=True)
                         autocast_context = (
                             torch.autocast(device_type="cuda", dtype=autocast_dtype)
-                            if device.type == "cuda" and precision_mode in {"bf16", "fp16"}
+                            if device.type == "cuda"
+                            and precision_mode in {"bf16", "fp16"}
                             else nullcontext()
                         )
                         with autocast_context:
@@ -4971,7 +5805,9 @@ class GuidedSVSManager:
                         else:
                             optimizer.step()
                         for loss_name in train_loss_sums:
-                            train_loss_sums[loss_name] += float(loss_terms[loss_name].detach().cpu().item())
+                            train_loss_sums[loss_name] += float(
+                                loss_terms[loss_name].detach().cpu().item()
+                            )
                         phone_counts = self._phone_accuracy_counts(
                             outputs["phone_logits"],
                             batch["phone_ids"],
@@ -4983,10 +5819,15 @@ class GuidedSVSManager:
                             batch["target_vuv"],
                             batch["lengths"],
                         )
-                        for metric_name, metric_value in {**phone_counts, **vuv_counts}.items():
+                        for metric_name, metric_value in {
+                            **phone_counts,
+                            **vuv_counts,
+                        }.items():
                             train_metric_counts[metric_name] += float(metric_value)
                         train_batches += 1
-                        train_frame_count += int(batch["lengths"].sum().detach().cpu().item())
+                        train_frame_count += int(
+                            batch["lengths"].sum().detach().cpu().item()
+                        )
                         train_sample_count += int(batch["lengths"].shape[0])
 
                     model.eval()
@@ -5016,7 +5857,9 @@ class GuidedSVSManager:
                     val_frame_count = 0
                     with torch.no_grad():
                         for batch in val_loader_epoch:
-                            batch = {key: value.to(device) for key, value in batch.items()}
+                            batch = {
+                                key: value.to(device) for key, value in batch.items()
+                            }
                             outputs = self._predict_outputs(
                                 model,
                                 guide_mel=batch["guide_mel"],
@@ -5034,7 +5877,9 @@ class GuidedSVSManager:
                                 loss_weights=dict(config.get("loss_weights", {})),
                             )
                             for loss_name in val_loss_sums:
-                                val_loss_sums[loss_name] += float(loss_terms[loss_name].detach().cpu().item())
+                                val_loss_sums[loss_name] += float(
+                                    loss_terms[loss_name].detach().cpu().item()
+                                )
                             phone_counts = self._phone_accuracy_counts(
                                 outputs["phone_logits"],
                                 batch["phone_ids"],
@@ -5046,10 +5891,15 @@ class GuidedSVSManager:
                                 batch["target_vuv"],
                                 batch["lengths"],
                             )
-                            for metric_name, metric_value in {**phone_counts, **vuv_counts}.items():
+                            for metric_name, metric_value in {
+                                **phone_counts,
+                                **vuv_counts,
+                            }.items():
                                 val_metric_counts[metric_name] += float(metric_value)
                             val_batches += 1
-                            val_frame_count += int(batch["lengths"].sum().detach().cpu().item())
+                            val_frame_count += int(
+                                batch["lengths"].sum().detach().cpu().item()
+                            )
                     break
                 except RuntimeError as exc:
                     if (not self._is_loader_runtime_error(exc)) or loader_safe_mode:
@@ -5071,12 +5921,24 @@ class GuidedSVSManager:
             train_loss = train_loss_sums["total"] / max(train_batches, 1)
             val_loss = val_loss_sums["total"] / max(val_batches, 1)
             val_mel_loss = val_loss_sums["mel"] / max(val_batches, 1)
-            train_phone_accuracy = train_metric_counts["phone_correct"] / max(train_metric_counts["phone_total"], 1.0)
-            val_phone_accuracy = val_metric_counts["phone_correct"] / max(val_metric_counts["phone_total"], 1.0)
-            train_lyric_phone_accuracy = train_metric_counts["lyric_phone_correct"] / max(train_metric_counts["lyric_phone_total"], 1.0)
-            val_lyric_phone_accuracy = val_metric_counts["lyric_phone_correct"] / max(val_metric_counts["lyric_phone_total"], 1.0)
-            train_vuv_accuracy = train_metric_counts["vuv_correct"] / max(train_metric_counts["vuv_total"], 1.0)
-            val_vuv_accuracy = val_metric_counts["vuv_correct"] / max(val_metric_counts["vuv_total"], 1.0)
+            train_phone_accuracy = train_metric_counts["phone_correct"] / max(
+                train_metric_counts["phone_total"], 1.0
+            )
+            val_phone_accuracy = val_metric_counts["phone_correct"] / max(
+                val_metric_counts["phone_total"], 1.0
+            )
+            train_lyric_phone_accuracy = train_metric_counts[
+                "lyric_phone_correct"
+            ] / max(train_metric_counts["lyric_phone_total"], 1.0)
+            val_lyric_phone_accuracy = val_metric_counts["lyric_phone_correct"] / max(
+                val_metric_counts["lyric_phone_total"], 1.0
+            )
+            train_vuv_accuracy = train_metric_counts["vuv_correct"] / max(
+                train_metric_counts["vuv_total"], 1.0
+            )
+            val_vuv_accuracy = val_metric_counts["vuv_correct"] / max(
+                val_metric_counts["vuv_total"], 1.0
+            )
             improved = val_loss <= best_val_loss + 1e-8
             if improved:
                 best_val_loss = val_loss
@@ -5089,7 +5951,9 @@ class GuidedSVSManager:
             epoch_duration = max(time.time() - epoch_started, 1e-6)
             train_frames_per_second = float(train_frame_count) / epoch_duration
             train_samples_per_second = float(train_sample_count) / epoch_duration
-            epochs_since_best = max(0, epoch - max(best_epoch, epoch if improved else 0))
+            epochs_since_best = max(
+                0, epoch - max(best_epoch, epoch if improved else 0)
+            )
             quality_state = self._describe_quality_state(
                 improved=improved,
                 epochs_since_best=epochs_since_best,
@@ -5101,38 +5965,74 @@ class GuidedSVSManager:
                 {
                     "epoch": epoch,
                     "phase": str(curriculum_state.get("name", "full-diversity")),
-                    "active_train_slices": int(curriculum_state.get("selected_count", len(active_train_entries))),
+                    "active_train_slices": int(
+                        curriculum_state.get(
+                            "selected_count", len(active_train_entries)
+                        )
+                    ),
                     "train_total": round(train_loss, 6),
-                    "train_mel": round(train_loss_sums["mel"] / max(train_batches, 1), 6),
-                    "train_stft": round(train_loss_sums["stft"] / max(train_batches, 1), 6),
-                    "train_phase": round(train_loss_sums["phase"] / max(train_batches, 1), 6),
+                    "train_mel": round(
+                        train_loss_sums["mel"] / max(train_batches, 1), 6
+                    ),
+                    "train_stft": round(
+                        train_loss_sums["stft"] / max(train_batches, 1), 6
+                    ),
+                    "train_phase": round(
+                        train_loss_sums["phase"] / max(train_batches, 1), 6
+                    ),
                     "train_f0": round(train_loss_sums["f0"] / max(train_batches, 1), 6),
-                    "train_delta_mel": round(train_loss_sums["delta_mel"] / max(train_batches, 1), 6),
-                    "train_delta_f0": round(train_loss_sums["delta_f0"] / max(train_batches, 1), 6),
-                    "train_vuv": round(train_loss_sums["vuv"] / max(train_batches, 1), 6),
-                    "train_phones": round(train_loss_sums["phones"] / max(train_batches, 1), 6),
-                    "train_voice": round(train_loss_sums["voice"] / max(train_batches, 1), 6),
-                    "train_prototype": round(train_loss_sums["prototype"] / max(train_batches, 1), 6),
-                    "train_silence": round(train_loss_sums["silence"] / max(train_batches, 1), 6),
+                    "train_delta_mel": round(
+                        train_loss_sums["delta_mel"] / max(train_batches, 1), 6
+                    ),
+                    "train_delta_f0": round(
+                        train_loss_sums["delta_f0"] / max(train_batches, 1), 6
+                    ),
+                    "train_vuv": round(
+                        train_loss_sums["vuv"] / max(train_batches, 1), 6
+                    ),
+                    "train_phones": round(
+                        train_loss_sums["phones"] / max(train_batches, 1), 6
+                    ),
+                    "train_voice": round(
+                        train_loss_sums["voice"] / max(train_batches, 1), 6
+                    ),
+                    "train_prototype": round(
+                        train_loss_sums["prototype"] / max(train_batches, 1), 6
+                    ),
+                    "train_silence": round(
+                        train_loss_sums["silence"] / max(train_batches, 1), 6
+                    ),
                     "val_total": round(val_loss, 6),
                     "val_mel": round(val_loss_sums["mel"] / max(val_batches, 1), 6),
                     "val_stft": round(val_loss_sums["stft"] / max(val_batches, 1), 6),
                     "val_phase": round(val_loss_sums["phase"] / max(val_batches, 1), 6),
                     "val_f0": round(val_loss_sums["f0"] / max(val_batches, 1), 6),
-                    "val_delta_mel": round(val_loss_sums["delta_mel"] / max(val_batches, 1), 6),
-                    "val_delta_f0": round(val_loss_sums["delta_f0"] / max(val_batches, 1), 6),
+                    "val_delta_mel": round(
+                        val_loss_sums["delta_mel"] / max(val_batches, 1), 6
+                    ),
+                    "val_delta_f0": round(
+                        val_loss_sums["delta_f0"] / max(val_batches, 1), 6
+                    ),
                     "val_vuv": round(val_loss_sums["vuv"] / max(val_batches, 1), 6),
-                    "val_phones": round(val_loss_sums["phones"] / max(val_batches, 1), 6),
+                    "val_phones": round(
+                        val_loss_sums["phones"] / max(val_batches, 1), 6
+                    ),
                     "val_voice": round(val_loss_sums["voice"] / max(val_batches, 1), 6),
-                    "val_prototype": round(val_loss_sums["prototype"] / max(val_batches, 1), 6),
-                    "val_silence": round(val_loss_sums["silence"] / max(val_batches, 1), 6),
+                    "val_prototype": round(
+                        val_loss_sums["prototype"] / max(val_batches, 1), 6
+                    ),
+                    "val_silence": round(
+                        val_loss_sums["silence"] / max(val_batches, 1), 6
+                    ),
                     "train_phone_accuracy": round(train_phone_accuracy, 6),
                     "val_phone_accuracy": round(val_phone_accuracy, 6),
                     "train_lyric_phone_accuracy": round(train_lyric_phone_accuracy, 6),
                     "val_lyric_phone_accuracy": round(val_lyric_phone_accuracy, 6),
                     "train_vuv_accuracy": round(train_vuv_accuracy, 6),
                     "val_vuv_accuracy": round(val_vuv_accuracy, 6),
-                    "train_l1": round(train_loss_sums["mel"] / max(train_batches, 1), 6),
+                    "train_l1": round(
+                        train_loss_sums["mel"] / max(train_batches, 1), 6
+                    ),
                     "val_l1": round(val_loss_sums["mel"] / max(val_batches, 1), 6),
                     "best_val_l1": round(best_val_mel, 6),
                     "best_val_total": round(best_val_loss, 6),
@@ -5182,7 +6082,17 @@ class GuidedSVSManager:
                 )
 
             completed_run_epochs = max(1, epoch - resume_epoch)
-            progress = min(82, max(10, int(round((completed_run_epochs / max(requested_run_epochs, 1)) * 82))))
+            progress = min(
+                82,
+                max(
+                    10,
+                    int(
+                        round(
+                            (completed_run_epochs / max(requested_run_epochs, 1)) * 82
+                        )
+                    ),
+                ),
+            )
             update_status(
                 "guided-svs-train",
                 (
@@ -5213,7 +6123,9 @@ class GuidedSVSManager:
         history_path = output_dir / "guided_regeneration_history.json"
         history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
         vocoder_metadata: Dict[str, object] = {}
-        if cancel_event is None or not bool(getattr(cancel_event, "is_set", lambda: False)()):
+        if cancel_event is None or not bool(
+            getattr(cancel_event, "is_set", lambda: False)()
+        ):
             try:
                 vocoder_metadata = self.train_neural_vocoder(
                     dataset_dir=dataset_dir,
@@ -5233,7 +6145,9 @@ class GuidedSVSManager:
             except Exception as exc:
                 vocoder_metadata = {"error": str(exc)}
         preview_metadata: Dict[str, object] = {}
-        if cancel_event is not None and bool(getattr(cancel_event, "is_set", lambda: False)()):
+        if cancel_event is not None and bool(
+            getattr(cancel_event, "is_set", lambda: False)()
+        ):
             preview_metadata = {
                 "preview_skipped": True,
                 "preview_reason": "Training was stopped before preview rendering.",
@@ -5241,7 +6155,11 @@ class GuidedSVSManager:
         else:
             try:
                 preview_metadata = self._render_preview(
-                    checkpoint_path=best_checkpoint_path if best_checkpoint_path.exists() else latest_checkpoint_path,
+                    checkpoint_path=(
+                        best_checkpoint_path
+                        if best_checkpoint_path.exists()
+                        else latest_checkpoint_path
+                    ),
                     dataset_dir=dataset_dir,
                     stats=stats,
                     sample_entry=val_entries[0] if val_entries else train_entries[0],
@@ -5269,7 +6187,9 @@ class GuidedSVSManager:
             "hardware_summary": hardware_summary,
             "quality_summary": history[-1]["quality_state"] if history else "",
             "precision_mode": precision_mode,
-            "optimizer_mode": "fused-adamw" if optimizer_kwargs.get("fused") else "adamw",
+            "optimizer_mode": (
+                "fused-adamw" if optimizer_kwargs.get("fused") else "adamw"
+            ),
             "pair_filtering": dict(filter_metadata),
             "search_mode": "mc-dropout-target-voice-rerank",
             "resume_epoch": int(resume_epoch),
@@ -5277,12 +6197,18 @@ class GuidedSVSManager:
             "start_phase": normalized_start_phase,
             "curriculum": dict(config.get("curriculum", {})),
             "voice_signature_dim": VOICE_SIGNATURE_DIM,
-            "checkpoint_path": str(best_checkpoint_path if best_checkpoint_path.exists() else latest_checkpoint_path),
+            "checkpoint_path": str(
+                best_checkpoint_path
+                if best_checkpoint_path.exists()
+                else latest_checkpoint_path
+            ),
             "latest_checkpoint_path": str(latest_checkpoint_path),
             "history_path": str(history_path),
             "guided_vocoder": {
                 "checkpoint_path": str(vocoder_metadata.get("checkpoint_path", "")),
-                "latest_checkpoint_path": str(vocoder_metadata.get("latest_checkpoint_path", "")),
+                "latest_checkpoint_path": str(
+                    vocoder_metadata.get("latest_checkpoint_path", "")
+                ),
                 "config_path": str(vocoder_metadata.get("config_path", "")),
                 "report_path": str(vocoder_metadata.get("report_path", "")),
                 "history_path": str(vocoder_metadata.get("history_path", "")),
@@ -5298,7 +6224,11 @@ class GuidedSVSManager:
         report_path = output_dir / "guided_regeneration_report.json"
         report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
         return {
-            "checkpoint_path": str(best_checkpoint_path if best_checkpoint_path.exists() else latest_checkpoint_path),
+            "checkpoint_path": str(
+                best_checkpoint_path
+                if best_checkpoint_path.exists()
+                else latest_checkpoint_path
+            ),
             "latest_checkpoint_path": str(latest_checkpoint_path),
             "config_path": str(config_path),
             "report_path": str(report_path),
@@ -5319,15 +6249,28 @@ class GuidedSVSManager:
             "search_mode": "mc-dropout-target-voice-rerank",
             "voice_signature_dim": VOICE_SIGNATURE_DIM,
             "vocoder_checkpoint_path": str(vocoder_metadata.get("checkpoint_path", "")),
-            "vocoder_latest_checkpoint_path": str(vocoder_metadata.get("latest_checkpoint_path", "")),
+            "vocoder_latest_checkpoint_path": str(
+                vocoder_metadata.get("latest_checkpoint_path", "")
+            ),
             "vocoder_config_path": str(vocoder_metadata.get("config_path", "")),
             "vocoder_report_path": str(vocoder_metadata.get("report_path", "")),
             "vocoder_history_path": str(vocoder_metadata.get("history_path", "")),
-            "vocoder_best_val_total": float(vocoder_metadata.get("best_val_total", 0.0)),
+            "vocoder_best_val_total": float(
+                vocoder_metadata.get("best_val_total", 0.0)
+            ),
             "vocoder_best_epoch": int(vocoder_metadata.get("best_epoch", 0)),
             "vocoder_quality_summary": str(vocoder_metadata.get("quality_summary", "")),
-            "vocoder_hardware_summary": str(vocoder_metadata.get("hardware_summary", "")),
-            "render_mode": str(vocoder_metadata.get("render_mode", preview_metadata.get("preview_render_mode", "griffinlim_preview_only"))),
+            "vocoder_hardware_summary": str(
+                vocoder_metadata.get("hardware_summary", "")
+            ),
+            "render_mode": str(
+                vocoder_metadata.get(
+                    "render_mode",
+                    preview_metadata.get(
+                        "preview_render_mode", "griffinlim_preview_only"
+                    ),
+                )
+            ),
             "resume_epoch": int(resume_epoch),
             "target_end_epoch": int(target_end_epoch),
             "start_phase": normalized_start_phase,

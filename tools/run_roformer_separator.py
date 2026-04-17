@@ -11,8 +11,12 @@ from audio_separator.separator import Separator
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, help="Input audio file")
-    parser.add_argument("--output-dir", required=True, help="Directory for output stems")
-    parser.add_argument("--model-dir", required=True, help="Directory for cached separator models")
+    parser.add_argument(
+        "--output-dir", required=True, help="Directory for output stems"
+    )
+    parser.add_argument(
+        "--model-dir", required=True, help="Directory for cached separator models"
+    )
     parser.add_argument(
         "--model",
         default="model_bs_roformer_ep_317_sdr_12.9755.ckpt",
@@ -75,7 +79,9 @@ def main() -> None:
         },
     )
 
-    resolved_outputs = [str((output_dir / Path(file).name).resolve()) for file in output_files]
+    resolved_outputs = [
+        str((output_dir / Path(file).name).resolve()) for file in output_files
+    ]
     payload = {
         "model": args.model,
         "segment_size": int(args.segment_size),
