@@ -69,6 +69,31 @@ class SimpleTrainer:
             "f0_methods": ["rmvpe", "mangio-crepe", "crepe", "harvest", "dio", "pm"],
             "output_modes": [
                 {
+                    "id": "classic-rvc-support",
+                    "label": "Classic RVC + SUNO audition",
+                    "description": "Builds a standard RVC .pth and index from the real BASE target vocals first, with optional extra true-target clips. SUNO clips are kept out of the speaker-truth dataset and used instead for fixed checkpoint audition previews so you can hear how the current model handles that source domain.",
+                },
+                {
+                    "id": "persona-aligned-pth",
+                    "label": "Paired aligned conversion",
+                    "description": "Uses BASE identity clips plus tightly aligned TARGET/SUNO pairs to train a direct full-vocal .pth converter, and over-samples perceptual detail windows where the target has more edge, articulation, or texture than the aligned SUNO source.",
+                },
+                {
+                    "id": "concert-remaster-paired",
+                    "label": "Concert remaster",
+                    "description": "Uses matched CONCERT and CD clips to train a direct learned remaster bundle that maps live concert vocals toward CD-quality output without relying on EQ-only processing.",
+                },
+                {
+                    "id": "persona-lyric-repair",
+                    "label": "Persona lyric repair",
+                    "description": "Builds a lyric-only target vocal package that focuses on clean lead conversion, adlib suppression, and dense pronunciation repair instead of full vocal regeneration.",
+                },
+                {
+                    "id": "persona-v1.1",
+                    "label": "Persona v1.1",
+                    "description": "Builds the overhauled guide-conditioned package with guide-delta supervision, contextual identity conditioning, stronger temporal coherence losses, and optional legacy-checkpoint reform into the new v1.1 architecture.",
+                },
+                {
                     "id": "persona-v1",
                     "label": "Persona v1.0",
                     "description": "Builds the direct voice-builder package only: paired-song regenerator, pronunciation assets, and the persona manifest used by the new conversion flow.",
@@ -78,17 +103,17 @@ class SimpleTrainer:
                 {
                     "id": "forgiving",
                     "label": "Forgiving",
-                    "description": "Best default. Small transcript drift gets skipped instead of failing the package build.",
+                    "description": "Best default. Small naming or duration mismatches are tolerated instead of failing the aligned package build immediately.",
                 },
                 {
                     "id": "balanced",
                     "label": "Balanced",
-                    "description": "Only keeps cleaner transcript matches in the pronunciation bank.",
+                    "description": "Keeps only cleaner aligned matches when assembling the paired conversion dataset.",
                 },
                 {
                     "id": "strict",
                     "label": "Strict",
-                    "description": "Requires stronger transcript alignment before phrase references are kept.",
+                    "description": "Requires stronger aligned-pair confidence before the run is allowed to continue.",
                 },
             ],
             "transcript_formats": [
@@ -97,19 +122,23 @@ class SimpleTrainer:
                 "JSON/JSONL with filename + transcript objects",
             ],
             "phoneme_note": (
-                "PIPA now supports a persona-builder recipe: pure target vocals teach general voice identity, "
-                "while paired de-personafied songs teach how to rebuild the real target performance from a neutral guide."
+                "Classic RVC + SUNO audition keeps BASE clips as the real target-voice truth and re-renders the same "
+                "short SUNO source chunk at each checkpoint so you can hear progress. Paired aligned conversion still "
+                "uses matched TARGET/SUNO clips for exact source-to-target supervision."
             ),
             "rebuild_note": (
-                "Each package stores guide-following rebuild metadata and a direct voice-builder checkpoint trained from "
-                "base identity clips plus paired guide-to-target song slices."
+                "The stable classic package stores a standard .pth backbone plus index, along with metadata showing "
+                "which BASE, TARGET, and SUNO clips were used for truth audio versus checkpoint auditions."
             ),
             "training_plan_note": (
-                "Preferred dataset layout: upload all audio together, then add one JSON training plan listing "
-                "base vocals and each paired song's target vocal, lyrics, and de-personafied guides."
+                "These modes do not need a persona plan. Use BASE for the true target voice, optional TARGET/VOCALP "
+                "for extra true-target coverage, and SUNO/PREP/PRE for fixed checkpoint audition sources."
             ),
             "cuda_available": cuda_available,
             "warning": warning,
+            "defaults": {
+                "output_mode": "classic-rvc-support",
+            },
         }
 
     def make_unique_experiment_name(self, raw_name: str) -> str:
@@ -148,6 +177,7 @@ class SimpleTrainer:
         speaker_id: int = 0,
         update_status: Callable[[str, str, str, int], None],
         cancel_event: Optional[threading.Event] = None,
+        checkpoint_callback: Optional[Callable[[Dict[str, object]], None]] = None,
     ) -> Dict[str, str]:
         with self.lock:
             exp_dir = self.logs_root / experiment_name
@@ -243,42 +273,22 @@ class SimpleTrainer:
                     "",
                     76,
                 )
-                self._run_stage(
-                    [
-                        self._python_cmd(),
-                        "train_nsf_sim_cache_sid_load_pretrain.py",
-                        "-e",
-                        experiment_name,
-                        "-sr",
-                        sample_rate,
-                        "-f0",
-                        "1" if use_f0 else "0",
-                        "-bs",
-                        str(batch_size),
-                        "-te",
-                        str(total_epochs),
-                        "-se",
-                        str(save_every_epoch),
-                        "-pg",
-                        str(pretrained_g),
-                        "-pd",
-                        str(pretrained_d),
-                        "-l",
-                        "1",
-                        "-c",
-                        "0",
-                        "-sw",
-                        "1",
-                        "-v",
-                        version,
-                        "-li",
-                        str(self._set_log_interval(exp_dir, batch_size)),
-                    ],
-                    stage_name="train",
+                self._run_training_stage(
+                    experiment_name=experiment_name,
+                    exp_dir=exp_dir,
+                    sample_rate=sample_rate,
+                    version=version,
+                    use_f0=use_f0,
+                    batch_size=batch_size,
+                    total_epochs=total_epochs,
+                    save_every_epoch=save_every_epoch,
+                    pretrained_g=pretrained_g,
+                    pretrained_d=pretrained_d,
                     progress=88,
                     log_path=train_log,
                     update_status=update_status,
                     cancel_event=cancel_event,
+                    checkpoint_callback=checkpoint_callback,
                 )
                 stopped_early = False
             except StageInterruptedError as exc:
@@ -344,6 +354,138 @@ class SimpleTrainer:
                 "stopped_early": "1" if stopped_early else "0",
             }
 
+    def _run_training_stage(
+        self,
+        *,
+        experiment_name: str,
+        exp_dir: Path,
+        sample_rate: str,
+        version: str,
+        use_f0: bool,
+        batch_size: int,
+        total_epochs: int,
+        save_every_epoch: int,
+        pretrained_g: Path,
+        pretrained_d: Path,
+        progress: int,
+        log_path: Optional[Path],
+        update_status: Callable[[str, str, str, int], None],
+        cancel_event: Optional[threading.Event] = None,
+        checkpoint_callback: Optional[Callable[[Dict[str, object]], None]] = None,
+    ) -> None:
+        command = [
+            self._python_cmd(),
+            "train_nsf_sim_cache_sid_load_pretrain.py",
+            "-e",
+            experiment_name,
+            "-sr",
+            sample_rate,
+            "-f0",
+            "1" if use_f0 else "0",
+            "-bs",
+            str(batch_size),
+            "-te",
+            str(total_epochs),
+            "-se",
+            str(save_every_epoch),
+            "-pg",
+            str(pretrained_g),
+            "-pd",
+            str(pretrained_d),
+            "-l",
+            "1",
+            "-c",
+            "0",
+            "-sw",
+            "1",
+            "-v",
+            version,
+            "-li",
+            str(self._set_log_interval(exp_dir, batch_size)),
+        ]
+        capture_path = self.logs_root / "_simple_web_training_capture.log"
+        capture_path.parent.mkdir(parents=True, exist_ok=True)
+        metric_state: Dict[str, float] = {}
+        last_preview_epoch = 0
+        with capture_path.open("a", encoding="utf-8", errors="ignore") as capture:
+            capture.write(f"\n\n[train] {' '.join(command)}\n")
+            capture.flush()
+            process = subprocess.Popen(
+                command,
+                cwd=str(self.repo_root),
+                stdout=capture,
+                stderr=subprocess.STDOUT,
+            )
+            while process.poll() is None:
+                if cancel_event is not None and cancel_event.is_set():
+                    self._terminate_process(process)
+                    raise StageInterruptedError(
+                        "train",
+                        "Training stopped by user.",
+                    )
+                source = log_path if log_path and log_path.exists() else capture_path
+                tail_text = self._tail_file(source)
+                metric_summary = self._summarize_stage_metrics(
+                    "train",
+                    tail_text,
+                    metric_state=metric_state,
+                )
+                message = "Training is running..."
+                if metric_summary:
+                    message = f"{message} {metric_summary}"
+                update_status(
+                    "train",
+                    message,
+                    tail_text,
+                    progress,
+                )
+                if checkpoint_callback is not None:
+                    latest_checkpoint_epoch = self._find_latest_checkpoint_epoch(exp_dir)
+                    if latest_checkpoint_epoch > last_preview_epoch:
+                        latest_saved_model = self._find_latest_saved_weight(experiment_name)
+                        if latest_saved_model is not None and latest_saved_model.exists():
+                            try:
+                                checkpoint_callback(
+                                    {
+                                        "epoch": latest_checkpoint_epoch,
+                                        "model_path": str(latest_saved_model),
+                                    }
+                                )
+                                last_preview_epoch = latest_checkpoint_epoch
+                            except Exception:
+                                pass
+                time.sleep(0.35)
+            return_code = process.wait()
+
+        if checkpoint_callback is not None:
+            latest_checkpoint_epoch = self._find_latest_checkpoint_epoch(exp_dir)
+            if latest_checkpoint_epoch > last_preview_epoch:
+                latest_saved_model = self._find_latest_saved_weight(experiment_name)
+                if latest_saved_model is not None and latest_saved_model.exists():
+                    try:
+                        checkpoint_callback(
+                            {
+                                "epoch": latest_checkpoint_epoch,
+                                "model_path": str(latest_saved_model),
+                            }
+                        )
+                    except Exception:
+                        pass
+
+        source = log_path if log_path and log_path.exists() else capture_path
+        final_log = self._tail_file(source)
+        if return_code != 0:
+            capture_log = self._tail_file(capture_path)
+            failure_summary = ""
+            if log_path:
+                failure_summary = self._summarize_training_failure(log_path)
+            raise RuntimeError(
+                failure_summary
+                or capture_log
+                or final_log
+                or "Training failed."
+            )
+
     def _python_cmd(self) -> str:
         venv_python = self.repo_root / ".venv" / "Scripts" / "python.exe"
         if venv_python.exists():
@@ -401,8 +543,15 @@ class SimpleTrainer:
         source = log_path if log_path and log_path.exists() else capture_path
         final_log = self._tail_file(source)
         if return_code != 0:
+            capture_log = self._tail_file(capture_path)
+            failure_summary = ""
+            if stage_name == "train" and log_path:
+                failure_summary = self._summarize_training_failure(log_path)
             raise RuntimeError(
-                final_log or f"{self._human_stage_name(stage_name)} failed."
+                failure_summary
+                or capture_log
+                or final_log
+                or f"{self._human_stage_name(stage_name)} failed."
             )
 
     def _terminate_process(self, process: subprocess.Popen) -> None:
@@ -592,6 +741,15 @@ class SimpleTrainer:
             reverse=True,
         )
         return candidates[0] if candidates else None
+
+    def _find_latest_checkpoint_epoch(self, exp_dir: Path) -> int:
+        latest_epoch = 0
+        for checkpoint_path in exp_dir.glob("G_*.pth"):
+            match = re.search(r"G_(\d+)$", checkpoint_path.stem)
+            if not match:
+                continue
+            latest_epoch = max(latest_epoch, int(match.group(1)))
+        return latest_epoch
 
     def _safe_dataset_stem(self, stem: str) -> str:
         cleaned = []

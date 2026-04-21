@@ -12,6 +12,7 @@ const state = {
   previewDebounceHandle: null,
   previewRequestToken: 0,
   currentJobId: null,
+  currentJobKind: "master-conversion",
   pollHandle: null,
   generateGuideFile: null,
   currentGenerateJobId: null,
@@ -54,7 +55,222 @@ const state = {
   trainingOptions: null,
   currentTrainingJobId: null,
   trainingPollHandle: null,
+  trainingPollInFlight: false,
+  currentConversionModelName: "",
+  currentConversionModelLabel: "",
+  currentConversionModelSystem: "",
+  convertResultRetryCount: 0,
 };
+
+const PERSONA_PACKAGE_MODES = ["persona-v1", "persona-v1.1", "persona-lyric-repair", "persona-aligned-pth"];
+const DOWNLOADABLE_TRAINING_PACKAGE_MODES = [
+  "persona-v1",
+  "persona-v1.1",
+  "persona-lyric-repair",
+  "persona-aligned-pth",
+  "concert-remaster-paired",
+  "classic-rvc-support",
+];
+const RESUMABLE_PERSONA_PACKAGE_MODES = ["persona-v1", "persona-v1.1", "persona-lyric-repair"];
+const LEAD_BUILDER_PACKAGE_MODE = "persona-aligned-pth";
+
+function isPersonaPackageMode(mode) {
+  return PERSONA_PACKAGE_MODES.includes(String(mode || "").trim().toLowerCase());
+}
+
+function isDownloadableTrainingPackageMode(mode) {
+  return DOWNLOADABLE_TRAINING_PACKAGE_MODES.includes(String(mode || "").trim().toLowerCase());
+}
+
+function isResumablePersonaPackageMode(mode) {
+  return RESUMABLE_PERSONA_PACKAGE_MODES.includes(String(mode || "").trim().toLowerCase());
+}
+
+function getPersonaPackageLabel(mode) {
+  const normalized = String(mode || "").trim().toLowerCase();
+  if (normalized === "persona-v1.1") {
+    return "Persona v1.1";
+  }
+  if (normalized === "persona-lyric-repair") {
+    return "Persona lyric repair";
+  }
+  if (normalized === "concert-remaster-paired") {
+    return "Concert remaster";
+  }
+  if (normalized === "classic-rvc-support") {
+    return "Classic RVC + SUNO audition";
+  }
+  if (normalized === "persona-aligned-pth") {
+    return "Paired aligned conversion";
+  }
+  return "Persona v1.0";
+}
+
+function isAlignedPthPackageMode(mode) {
+  return String(mode || "").trim().toLowerCase() === LEAD_BUILDER_PACKAGE_MODE;
+}
+
+function isClassicRvcPackageMode(mode) {
+  return String(mode || "").trim().toLowerCase() === "classic-rvc";
+}
+
+function isClassicSupportPackageMode(mode) {
+  return String(mode || "").trim().toLowerCase() === "classic-rvc-support";
+}
+
+function isLeadBuilderConversionModel(model) {
+  const kind = String(model?.kind || "").trim().toLowerCase();
+  const packageMode = String(model?.package_mode || "").trim().toLowerCase();
+  return kind === "model"
+    || packageMode === LEAD_BUILDER_PACKAGE_MODE
+    || isClassicSupportPackageMode(packageMode)
+    || isClassicRvcPackageMode(packageMode);
+}
+
+function getLeadBuilderModels() {
+  return (state.models || []).filter((model) => isLeadBuilderConversionModel(model));
+}
+
+function getPersonaRepairModels() {
+  return (state.models || []).filter(
+    (model) => String(model?.kind || "").trim().toLowerCase() !== "classic",
+  );
+}
+
+function getLeadBuilderSelectedModel() {
+  return (
+    getLeadBuilderModels().find((model) => model.name === modelSelect?.value)
+    || getLeadBuilderModels()[0]
+    || null
+  );
+}
+
+function stripAlignedPrefix(fileName, prefixes) {
+  const safeName = String(fileName || "").trim();
+  if (!safeName) {
+    return "";
+  }
+  const lastDot = safeName.lastIndexOf(".");
+  const stem = lastDot > 0 ? safeName.slice(0, lastDot) : safeName;
+  const upperStem = stem.toUpperCase();
+  const cleanedPrefixes = [...prefixes]
+    .map((prefix) => String(prefix || "").trim().toUpperCase())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  let workingStem = stem;
+  for (const prefix of cleanedPrefixes) {
+    if (upperStem.startsWith(prefix)) {
+      workingStem = stem.slice(prefix.length);
+      break;
+    }
+  }
+  return workingStem.replace(/^[ _.-]+/, "").trim().toLowerCase();
+}
+
+const TRAINING_MODE_CONFIG = {
+  "classic-rvc-support": {
+    label: "Classic RVC + SUNO audition",
+    basePrefixes: ["BASE"],
+    targetPrefixes: ["TARGET", "VOCALP"],
+    sourcePrefixes: ["SUNO", "PREP", "PRE", "SUPPORT"],
+    baseName: "BASE",
+    targetName: "TARGET",
+    sourceName: "SUNO",
+    requiresPairs: false,
+    summary: "Classic RVC + SUNO audition uses `BASE*` as the real target-voice truth, optional `TARGET*` extra truth clips, and `SUNO*` only for fixed checkpoint auditions.",
+  },
+  "persona-aligned-pth": {
+    label: "Paired aligned conversion",
+    basePrefixes: ["BASE"],
+    targetPrefixes: ["TARGET", "VOCALP"],
+    sourcePrefixes: ["SUNO", "PREP", "PRE"],
+    baseName: "BASE",
+    targetName: "TARGET",
+    sourceName: "SUNO",
+    requiresPairs: true,
+    summary: "Paired aligned conversion uses `BASE*`, `TARGET*`, and `SUNO*` clips.",
+  },
+  "concert-remaster-paired": {
+    label: "Concert remaster",
+    basePrefixes: [],
+    targetPrefixes: ["CD", "MASTER", "STUDIO"],
+    sourcePrefixes: ["CONCERT", "LIVE"],
+    baseName: "",
+    targetName: "CD",
+    sourceName: "CONCERT",
+    requiresPairs: true,
+    summary: "Concert remaster uses matched `CONCERT*` and `CD*` clips.",
+  },
+};
+
+function getTrainingModeConfig(mode) {
+  return TRAINING_MODE_CONFIG[String(mode || "").trim().toLowerCase()] || TRAINING_MODE_CONFIG["classic-rvc-support"];
+}
+
+function summarizeTrainingFiles(files, mode) {
+  const config = getTrainingModeConfig(mode);
+  const baseKeys = new Set();
+  const targetKeys = new Set();
+  const sourceKeys = new Set();
+  let baseCount = 0;
+  let targetCount = 0;
+  let sourceCount = 0;
+
+  for (const file of files || []) {
+    const stem = String(file?.name || "").replace(/\.[^/.]+$/, "");
+    const upperStem = stem.toUpperCase();
+    if (config.basePrefixes.some((prefix) => upperStem.startsWith(prefix))) {
+      baseCount += 1;
+      const key = stripAlignedPrefix(file.name, config.basePrefixes);
+      if (key) {
+        baseKeys.add(key);
+      }
+      continue;
+    }
+    if (config.targetPrefixes.some((prefix) => upperStem.startsWith(prefix))) {
+      targetCount += 1;
+      const key = stripAlignedPrefix(file.name, config.targetPrefixes);
+      if (key) {
+        targetKeys.add(key);
+      }
+      continue;
+    }
+    if (config.sourcePrefixes.some((prefix) => upperStem.startsWith(prefix))) {
+      sourceCount += 1;
+      const key = stripAlignedPrefix(file.name, config.sourcePrefixes);
+      if (key) {
+        sourceKeys.add(key);
+      }
+    }
+  }
+
+  const matchedKeys = [...targetKeys].filter((key) => sourceKeys.has(key));
+  const unmatchedTargets = [...targetKeys].filter((key) => !sourceKeys.has(key));
+  const unmatchedSources = [...sourceKeys].filter((key) => !targetKeys.has(key));
+  return {
+    mode: String(mode || "").trim().toLowerCase() || "classic-rvc-support",
+    label: config.label,
+    baseCount,
+    targetCount,
+    sourceCount,
+    matchedPairCount: matchedKeys.length,
+    unmatchedTargets,
+    unmatchedSources,
+    summary: config.summary,
+    baseName: config.baseName,
+    targetName: config.targetName,
+    sourceName: config.sourceName,
+    requiresPairs: Boolean(config.requiresPairs),
+  };
+}
+
+function summarizeAlignedTrainingFiles(files) {
+  return summarizeTrainingFiles(files, "persona-aligned-pth");
+}
+
+function summarizeConcertRemasterTrainingFiles(files) {
+  return summarizeTrainingFiles(files, "concert-remaster-paired");
+}
 
 const showConvertTabButton = document.getElementById("showConvertTab");
 const showGenerateTabButton = document.getElementById("showGenerateTab");
@@ -298,6 +514,7 @@ const trainingVersion = document.getElementById("trainingVersion");
 const trainingSampleRate = document.getElementById("trainingSampleRate");
 const trainingF0Method = document.getElementById("trainingF0Method");
 const trainingOutputMode = document.getElementById("trainingOutputMode");
+const trainingModeSummary = document.getElementById("trainingModeSummary");
 const trainingPackageDownloadSelect = document.getElementById("trainingPackageDownloadSelect");
 const downloadTrainingPackageButton = document.getElementById("downloadTrainingPackageButton");
 const trainingPackageDownloadSummary = document.getElementById("trainingPackageDownloadSummary");
@@ -306,9 +523,6 @@ const trainingStartPhase = document.getElementById("trainingStartPhase");
 const trainingResumeSummary = document.getElementById("trainingResumeSummary");
 const trainingEpochMode = document.getElementById("trainingEpochMode");
 const trainingEpochModeSummary = document.getElementById("trainingEpochModeSummary");
-const trainingWarmupEpochs = document.getElementById("trainingWarmupEpochs");
-const trainingBridgeEpochs = document.getElementById("trainingBridgeEpochs");
-const trainingFullDiversityEpochs = document.getElementById("trainingFullDiversityEpochs");
 const trainingEpochs = document.getElementById("trainingEpochs");
 const trainingCurriculumSummary = document.getElementById("trainingCurriculumSummary");
 const trainingSaveEvery = document.getElementById("trainingSaveEvery");
@@ -320,7 +534,6 @@ const trainingFileList = document.getElementById("trainingFileList");
 const trainingPlanFileInput = document.getElementById("trainingPlanFileInput");
 const trainingPlanDropZone = document.getElementById("trainingPlanDropZone");
 const trainingPlanFileList = document.getElementById("trainingPlanFileList");
-const trainingAlignmentTolerance = document.getElementById("trainingAlignmentTolerance");
 const trainingTranscriptFileInput = document.getElementById("trainingTranscriptFileInput");
 const trainingTranscriptDropZone = document.getElementById("trainingTranscriptDropZone");
 const trainingTranscriptFileList = document.getElementById("trainingTranscriptFileList");
@@ -332,6 +545,9 @@ const trainingStatusTitle = document.getElementById("trainingStatusTitle");
 const trainingStatusMessage = document.getElementById("trainingStatusMessage");
 const trainingProgressBar = document.getElementById("trainingProgressBar");
 const trainingResultSummary = document.getElementById("trainingResultSummary");
+const trainingCheckpointPreview = document.getElementById("trainingCheckpointPreview");
+const trainingCheckpointPreviewMeta = document.getElementById("trainingCheckpointPreviewMeta");
+const trainingCheckpointPreviewPlayer = document.getElementById("trainingCheckpointPreviewPlayer");
 const trainingLog = document.getElementById("trainingLog");
 
 function bindIfPresent(element, eventName, handler) {
@@ -500,7 +716,7 @@ function updatePreprocessModeSummary() {
     return;
   }
   preprocessModeSummary.textContent =
-    "Pre-conversion isolation is disabled in Master Conversion. Upload your already-isolated vocal and we convert it directly.";
+    "Pre-conversion isolation is disabled in Lead Builder. Upload your already-isolated vocal and we convert it directly.";
 }
 
 function updateGeneratePreprocessModeSummary() {
@@ -570,96 +786,41 @@ function updateSliderLabels() {
 }
 
 function syncTrainingRunModeUI() {
-  const isLogicOnly = ["persona-v1", "pipa-logic-only"].includes(trainingOutputMode?.value);
-  const manualStop = trainingEpochMode?.value !== "fixed";
-  if (trainingEpochModeSummary) {
-    if (isLogicOnly && manualStop) {
-      trainingEpochModeSummary.textContent = "Persona v1.0 trains only the guide-conditioned voice-builder and pronunciation assets. It keeps going until you click Stop, then stays in full diversity after the scheduled stages are finished.";
-    } else if (isLogicOnly) {
-      trainingEpochModeSummary.textContent = "Persona v1.0 skips every legacy backbone stage. It stops automatically after the scheduled warm-up, bridge, and full-diversity epochs below.";
-    } else if (manualStop) {
-      trainingEpochModeSummary.textContent = "Manual-stop runs the paired voice-builder pass first, then continues training the RVC backbone until you click Stop. 'Save every' controls how often a fresh usable checkpoint is written.";
-    } else {
-      trainingEpochModeSummary.textContent = "Fixed mode stops automatically after the scheduled stages below. When enabled, the backbone stages finish after the paired voice-builder schedule.";
-    }
+  if (trainingEpochMode) {
+    trainingEpochMode.value = "fixed";
   }
+  const modeConfig = getTrainingModeConfig(trainingOutputMode?.value || "classic-rvc-support");
+  if (trainingModeSummary) {
+    trainingModeSummary.textContent = modeConfig.summary;
+  }
+  if (trainingEpochModeSummary) {
+    trainingEpochModeSummary.textContent = modeConfig.requiresPairs
+      ? `${modeConfig.label} now uses one real epoch count. Legacy warm-up, bridge, refine, matching, and worker knobs are disabled on this screen.`
+      : `${modeConfig.label} now uses one real epoch count. BASE clips stay as the main truth, and the fixed SUNO audition clip is only used for checkpoint listening.`;
+  }
+  renderTrainingFiles();
   updateTrainingCurriculumSummary();
 }
 
-function clampTrainingStageEpochInput(input, fallback) {
+function clampTrainingEpochInput(input, fallback) {
   if (!input) {
     return fallback;
   }
   const parsed = Number.parseInt(input.value || "", 10);
-  const nextValue = Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 10000)) : fallback;
+  const nextValue = Number.isFinite(parsed) ? Math.max(1, Math.min(parsed, 30000)) : fallback;
   input.value = String(nextValue);
   return nextValue;
 }
 
-function getTrainingCurriculumPlan() {
-  const warmup = clampTrainingStageEpochInput(trainingWarmupEpochs, 200);
-  const bridge = clampTrainingStageEpochInput(trainingBridgeEpochs, 500);
-  const full = clampTrainingStageEpochInput(trainingFullDiversityEpochs, 500);
-  const startPhase = trainingStartPhase?.value || "auto";
-  const selectedResume = (state.pipaPackages || []).find(
-    (entry) => entry.name === (trainingResumePackageSelect?.value || ""),
-  );
-  const resumeEpoch = Number(selectedResume?.guided_regeneration_last_epoch || 0);
-  let warmupRemaining = warmup;
-  let bridgeRemaining = bridge;
-  let fullRemaining = full;
-
-  if (startPhase === "curriculum-bridge") {
-    warmupRemaining = 0;
-  } else if (startPhase === "full-diversity") {
-    warmupRemaining = 0;
-    bridgeRemaining = 0;
-  } else if (startPhase === "auto" && resumeEpoch > 0) {
-    const warmupEnd = warmup;
-    const bridgeEnd = warmup + bridge;
-    if (resumeEpoch < warmupEnd) {
-      warmupRemaining = Math.max(0, warmupEnd - resumeEpoch);
-      bridgeRemaining = bridge;
-      fullRemaining = full;
-    } else if (resumeEpoch < bridgeEnd) {
-      warmupRemaining = 0;
-      bridgeRemaining = Math.max(0, bridgeEnd - resumeEpoch);
-      fullRemaining = full;
-    } else {
-      warmupRemaining = 0;
-      bridgeRemaining = 0;
-      fullRemaining = full;
-    }
-  }
-
-  const fixedTotal = Math.max(1, warmupRemaining + bridgeRemaining + fullRemaining);
-  return {
-    warmup,
-    bridge,
-    full,
-    resumeEpoch,
-    fixedWarmup: warmupRemaining,
-    fixedBridge: bridgeRemaining,
-    fixedFull: fullRemaining,
-    fixedTotal,
-  };
-}
-
 function updateTrainingCurriculumSummary() {
-  const plan = getTrainingCurriculumPlan();
-  if (trainingEpochs) {
-    trainingEpochs.value = String(plan.fixedTotal);
-  }
+  const totalEpochs = clampTrainingEpochInput(trainingEpochs, 600);
   if (!trainingCurriculumSummary) {
     return;
   }
-  const manualStop = trainingEpochMode?.value !== "fixed";
-  const phaseLine = `Warm-up ${plan.fixedWarmup}, bridge ${plan.fixedBridge}, full diversity ${plan.fixedFull}.`;
-  if (manualStop) {
-    trainingCurriculumSummary.textContent = `${phaseLine} Manual-stop will keep going in full diversity after roughly ${plan.fixedTotal} scheduled epochs unless you stop earlier.`;
-    return;
-  }
-  trainingCurriculumSummary.textContent = `${phaseLine} Fixed mode will stop after ${plan.fixedTotal} scheduled epochs.`;
+  const modeConfig = getTrainingModeConfig(trainingOutputMode?.value || "classic-rvc-support");
+  trainingCurriculumSummary.textContent = modeConfig.requiresPairs
+    ? `The ${modeConfig.label.toLowerCase()} run will train for ${totalEpochs} epochs and then stop. Save frequency, batch size, and Crepe hop length are the only remaining advanced controls here.`
+    : `The ${modeConfig.label.toLowerCase()} run will train for ${totalEpochs} epochs and then stop. BASE clips stay dominant, optional TARGET clips add more true voice coverage, and the same SUNO audition clip is rendered again at every saved checkpoint.`;
 }
 
 function formatBytes(bytes) {
@@ -758,6 +919,166 @@ function escapeHtml(value) {
 
 function buildManagedAudioMarkup(url, title, subtitle = "") {
   return `<audio class="managed-audio-source" preload="metadata" src="${escapeHtml(url)}" data-player-title="${escapeHtml(title)}" data-player-subtitle="${escapeHtml(subtitle)}"></audio>`;
+}
+
+function appendDirectConversionResultCard(container, result) {
+  if (!container || !result) {
+    return;
+  }
+  const card = document.createElement("div");
+  card.className = "result-row";
+
+  const name = document.createElement("div");
+  name.className = "result-name";
+  name.textContent = result.download_name || result.name || "converted.wav";
+  card.appendChild(name);
+
+  const meta = document.createElement("div");
+  meta.className = "result-meta";
+  meta.textContent = `Sample rate: ${Number(result.sample_rate || 0)} Hz. Timing: npy ${Number(result.timings?.npy || 0).toFixed(2)}s, f0 ${Number(result.timings?.f0 || 0).toFixed(2)}s, infer ${Number(result.timings?.infer || 0).toFixed(2)}s.`;
+  card.appendChild(meta);
+
+  if (result.url) {
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.preload = "metadata";
+    audio.src = result.url;
+    audio.className = "direct-audio-player";
+    card.appendChild(audio);
+
+    const links = document.createElement("div");
+    links.className = "result-links";
+    const link = document.createElement("a");
+    link.className = "result-link";
+    link.href = result.url;
+    link.download = result.download_name || result.name || "converted.wav";
+    link.textContent = "Download file";
+    links.appendChild(link);
+    card.appendChild(links);
+  } else {
+    const missing = document.createElement("div");
+    missing.className = "result-meta";
+    missing.textContent = "Output file is missing a downloadable URL.";
+    card.appendChild(missing);
+  }
+
+  container.appendChild(card);
+}
+
+function normalizeDirectConversionResult(result) {
+  if (!result) {
+    return null;
+  }
+  const safeTimings = result.timings && typeof result.timings === "object" ? result.timings : {};
+  return {
+    name: result.name || result.download_name || "converted.wav",
+    url: String(result.url || result.result_url || "").trim(),
+    download_name: result.download_name || result.name || "converted.wav",
+    sample_rate: Number(result.sample_rate || 0),
+    timings: safeTimings,
+  };
+}
+
+function buildDirectConversionDownloadMarkup(result, label = "Download file") {
+  if (!result?.url) {
+    return "";
+  }
+  const href = escapeHtml(result.url);
+  const downloadName = escapeHtml(result.download_name || result.name || "converted.wav");
+  return `<a class="result-link" href="${href}" download="${downloadName}">${escapeHtml(label)}</a>`;
+}
+
+function showDirectConversionPreview(result) {
+  if (!previewMeta || !previewPlayer) {
+    return;
+  }
+  if (!result?.url) {
+    resetPreviewState(
+      "Preview disabled",
+      "Lead Builder now runs only the full direct-conversion path instead of the old 5 second preview.",
+    );
+    return;
+  }
+
+  const fileLabel = result.download_name || result.name || "converted.wav";
+  const timingSummary = [
+    `npy ${Number(result.timings?.npy || 0).toFixed(2)}s`,
+    `f0 ${Number(result.timings?.f0 || 0).toFixed(2)}s`,
+    `infer ${Number(result.timings?.infer || 0).toFixed(2)}s`,
+  ].join(" | ");
+  const subtitle = [
+    Number(result.sample_rate || 0) > 0 ? `${Number(result.sample_rate)} Hz` : "",
+    timingSummary,
+  ].filter(Boolean).join(" | ");
+
+  previewPlayer.pause();
+  previewPlayer.currentTime = 0;
+  setManagedAudioMeta(previewPlayer, fileLabel, subtitle || "Latest direct conversion");
+  previewPlayer.src = result.url;
+  previewPlayer.classList.remove("hidden");
+  previewPlayer.load();
+  setManagedAudioVisible(previewPlayer, true);
+
+  previewMeta.classList.remove("hidden");
+  previewMeta.innerHTML = `
+    <strong>Latest conversion ready</strong>
+    <p>${escapeHtml(fileLabel)} is loaded into the player below.</p>
+    <div class="result-links">
+      ${buildDirectConversionDownloadMarkup(result, "Download latest converted file")}
+    </div>
+  `;
+  setPreviewStatus("completed", "Latest conversion ready", "Play or download the finished vocal below.", 100);
+}
+
+function renderDirectConversionCompletion(job, renderableResults) {
+  const normalizedResults = (renderableResults || [])
+    .map((result) => normalizeDirectConversionResult(result))
+    .filter(Boolean);
+  const primaryResult = normalizedResults.find((result) => result.url) || normalizedResults[0] || null;
+
+  resultSummary.classList.toggle("hidden", !normalizedResults.length && !job.zip_url);
+  resultSummary.innerHTML = `
+    <strong>${state.currentConversionModelSystem || "Direct conversion"} finished</strong>
+    <p>Voice: ${escapeHtml(state.currentConversionModelLabel || modelSelect?.value || "unknown model")}.</p>
+    <p>Converted file${normalizedResults.length === 1 ? "" : "s"}: ${normalizedResults.length}. This render used only the trained \`.pth\` converter with no lyric repair or post-processing stage.</p>
+    <div class="result-links">
+      ${primaryResult?.url ? buildDirectConversionDownloadMarkup(primaryResult, "Download latest converted file") : ""}
+      ${job.zip_url ? `<a class="zip-link" href="${escapeHtml(job.zip_url)}" download>Download converted package</a>` : ""}
+    </div>
+  `;
+
+  results.replaceChildren();
+  normalizedResults.forEach((result) => {
+    appendDirectConversionResultCard(results, result);
+  });
+
+  showDirectConversionPreview(primaryResult);
+}
+
+function renderDirectConversionFallback(job, renderableResults, error) {
+  const normalizedResults = (renderableResults || [])
+    .map((result) => normalizeDirectConversionResult(result))
+    .filter(Boolean);
+  const primaryResult = normalizedResults.find((result) => result.url) || normalizedResults[0] || null;
+  console.error("Direct conversion result render failed.", error, job);
+
+  resultSummary.classList.remove("hidden");
+  resultSummary.innerHTML = `
+    <strong>${state.currentConversionModelSystem || "Direct conversion"} finished</strong>
+    <p>The rich result card failed to render, so the page is showing the raw output link instead.</p>
+    <p>${escapeHtml(error?.message || String(error || "Unknown browser render error"))}</p>
+    <div class="result-links">
+      ${primaryResult?.url ? buildDirectConversionDownloadMarkup(primaryResult, "Download raw converted file") : ""}
+      ${job?.zip_url ? `<a class="zip-link" href="${escapeHtml(job.zip_url)}" download>Download converted package</a>` : ""}
+    </div>
+  `;
+
+  results.replaceChildren();
+  if (primaryResult) {
+    appendDirectConversionResultCard(results, primaryResult);
+  }
+
+  showDirectConversionPreview(primaryResult);
 }
 
 let activeManagedAudio = null;
@@ -1110,7 +1431,7 @@ function renderFiles() {
   if (!state.files.length) {
     fileList.className = "file-list empty-list";
     fileList.innerHTML = "<p>No song selected yet.</p>";
-    resetPreviewState("Preview disabled", "Master Conversion uses the full-song pipeline.");
+    resetPreviewState("Preview disabled", "Lead Builder now runs only the full direct-conversion path.");
     return;
   }
 
@@ -1149,8 +1470,30 @@ function renderTrainingFiles() {
     return;
   }
 
+  const summary = summarizeTrainingFiles(state.trainingFiles, trainingOutputMode?.value || "classic-rvc-support");
+  const baseSegment = summary.baseCount ? `${summary.baseName} ${summary.baseCount} | ` : "";
+  const pairSummary = summary.requiresPairs
+    ? `${summary.targetName} ${summary.targetCount} | ${summary.sourceName} ${summary.sourceCount} | matched ${summary.targetName}/${summary.sourceName} pairs ${summary.matchedPairCount}`
+    : `${summary.targetName} ${summary.targetCount} | ${summary.sourceName} ${summary.sourceCount} | no exact pairs required`;
+  const mismatchSummary = summary.requiresPairs
+    ? (
+      summary.unmatchedTargets.length || summary.unmatchedSources.length
+        ? `Unmatched names: ${summary.unmatchedTargets.length} ${summary.targetName} and ${summary.unmatchedSources.length} ${summary.sourceName} still need partners.`
+        : `All discovered ${summary.targetName} and ${summary.sourceName} names currently have partners.`
+    )
+    : (
+      summary.sourceCount
+        ? `${summary.sourceName} clips will be kept as fixed checkpoint audition sources instead of target-speaker truth audio.`
+        : `Add ${summary.sourceName} clips if you want checkpoint auditions to use that source domain instead of falling back to target truth audio.`
+    );
   trainingFileList.className = "file-list";
-  trainingFileList.innerHTML = "";
+  trainingFileList.innerHTML = `
+    <div class="result-row">
+      <div class="result-name">${summary.label} dataset summary</div>
+      <div class="result-meta">${baseSegment}${pairSummary}</div>
+      <div class="result-meta">${mismatchSummary}</div>
+    </div>
+  `;
   state.trainingFiles.forEach((file, index) => {
     const row = document.createElement("div");
     row.className = "file-row";
@@ -1936,18 +2279,18 @@ function setIndexFile(fileListLike) {
 }
 
 function renderModels() {
-  const populate = (selectEl, { showEmptyState = false } = {}) => {
+  const populate = (selectEl, modelsToRender, { showEmptyState = false, emptyMessage = "No persona voices found" } = {}) => {
     if (!selectEl) {
       return;
     }
     const currentValue = selectEl.value;
     selectEl.innerHTML = "";
-    if (!state.models.length) {
-      selectEl.innerHTML = `<option value="">No persona voices found</option>`;
+    if (!modelsToRender.length) {
+      selectEl.innerHTML = `<option value="">${emptyMessage}</option>`;
       if (showEmptyState && modelEmptyState) {
         modelEmptyState.classList.remove("hidden");
         modelEmptyState.innerHTML =
-          "<strong>No Persona v1.0 voices found yet.</strong><p>Train or add a persona package, then refresh this list.</p>";
+          "<strong>No conversion voices found yet.</strong><p>Add a classic RVC <code>.pth</code> voice to <code>weights/</code> or train a paired aligned package from BASE, TARGET, and SUNO clips, then refresh this list.</p>";
       }
       return;
     }
@@ -1955,36 +2298,40 @@ function renderModels() {
     if (showEmptyState && modelEmptyState) {
       modelEmptyState.classList.add("hidden");
     }
-    for (const model of state.models) {
+    for (const model of modelsToRender) {
       const option = document.createElement("option");
       option.value = model.name;
       option.textContent = model.label || model.name;
       option.dataset.indexPath = model.default_index || "";
       selectEl.appendChild(option);
     }
-    if (state.models.some((model) => model.name === currentValue)) {
+    if (modelsToRender.some((model) => model.name === currentValue)) {
       selectEl.value = currentValue;
     } else {
-      selectEl.value = state.models[0].name;
+      selectEl.value = modelsToRender[0].name;
     }
   };
 
-  populate(modelSelect, { showEmptyState: true });
-  populate(secondaryModelSelect);
-  populate(generateModelSelect);
+  const leadBuilderModels = getLeadBuilderModels();
+  populate(modelSelect, leadBuilderModels, {
+    showEmptyState: true,
+    emptyMessage: "No conversion voices found",
+  });
+  populate(secondaryModelSelect, leadBuilderModels);
+  populate(generateModelSelect, getPersonaRepairModels());
   if (pipaPackageSelect) {
-    const selected = state.models.find((model) => model.name === modelSelect.value) || state.models[0];
-    pipaPackageSelect.innerHTML = `<option value="${selected?.name || ""}">${selected?.label || "Bundled persona package"}</option>`;
+    const selected = getLeadBuilderSelectedModel();
+    pipaPackageSelect.innerHTML = `<option value="${selected?.name || ""}">${selected?.label || selected?.system || "Selected conversion voice"}</option>`;
     if (selected?.name) {
       pipaPackageSelect.value = selected.name;
     }
   }
   if (
     secondaryModelSelect &&
-    state.models.length > 1 &&
+    leadBuilderModels.length > 1 &&
     secondaryModelSelect.value === modelSelect.value
   ) {
-    const alternate = state.models.find((model) => model.name !== modelSelect.value);
+    const alternate = leadBuilderModels.find((model) => model.name !== modelSelect.value);
     if (alternate) {
       secondaryModelSelect.value = alternate.name;
     }
@@ -2033,8 +2380,7 @@ function renderDetagVoices() {
 }
 
 function syncModelDefaults() {
-  const selected =
-    state.models.find((model) => model.name === modelSelect.value) || state.models[0];
+  const selected = getLeadBuilderSelectedModel();
   if (!selected) {
     indexPath.value = "";
     return;
@@ -2048,22 +2394,21 @@ function updatePipaPackageSummary() {
   if (!pipaPackageSummary) {
     return;
   }
-  const selectedModel =
-    (state.models || []).find((model) => model.name === modelSelect?.value) || null;
+  const selectedModel = getLeadBuilderSelectedModel();
   if (!selectedModel) {
     pipaPackageSummary.textContent =
-      "Persona v1.0 package used for the final lead rebuild.";
+      "Paired aligned and classic RVC .pth voices appear here. Add one to use Lead Builder.";
     return;
   }
   pipaPackageSummary.textContent =
-    `${selectedModel.label || selectedModel.name} will render through Persona v1.0. The package already contains its own builder logic.`;
+    `${selectedModel.label || selectedModel.name} will run as a direct ${String(selectedModel.system || "conversion").toLowerCase()} run. Lyrics, repair modes, and rebuild passes are not used here.`;
 }
 
 function updateQualitySummary() {
   const preset = state.qualityPresets[qualityPreset.value];
   if (!preset) {
     qualitySummary.textContent =
-      "Balanced is the safest default for most lead rebuilds.";
+      "Balanced is the safest default for most direct paired conversions.";
     return;
   }
   qualitySummary.textContent = `${preset.label}: ${preset.description}`;
@@ -2145,7 +2490,7 @@ function renderTrainingPackageDownloads() {
   }
 
   const packages = Array.isArray(state.pipaPackages)
-    ? state.pipaPackages.filter((entry) => String(entry?.package_mode || "persona-v1") === "persona-v1")
+    ? state.pipaPackages.filter((entry) => isDownloadableTrainingPackageMode(entry?.package_mode || "persona-v1"))
     : [];
   const previousValue = trainingPackageDownloadSelect.value;
   trainingPackageDownloadSelect.innerHTML = "";
@@ -2153,14 +2498,14 @@ function renderTrainingPackageDownloads() {
   if (!packages.length) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "No Persona packages found yet";
+    option.textContent = "No training packages found yet";
     trainingPackageDownloadSelect.appendChild(option);
     trainingPackageDownloadSelect.disabled = true;
     if (downloadTrainingPackageButton) {
       downloadTrainingPackageButton.disabled = true;
     }
     if (trainingPackageDownloadSummary) {
-      trainingPackageDownloadSummary.textContent = "Train a Persona package first, then download the full folder here.";
+      trainingPackageDownloadSummary.textContent = "Train a voice package first, then download the full folder here.";
     }
     return;
   }
@@ -2168,7 +2513,7 @@ function renderTrainingPackageDownloads() {
   packages.forEach((entry) => {
     const option = document.createElement("option");
     option.value = entry.name || "";
-    option.textContent = entry.label || entry.name || "Persona package";
+    option.textContent = entry.label || entry.name || "Training package";
     trainingPackageDownloadSelect.appendChild(option);
   });
 
@@ -2190,8 +2535,8 @@ function updateTrainingPackageDownloadSummary() {
   }
   const selected = (state.pipaPackages || []).find((entry) => entry.name === selectionName);
   trainingPackageDownloadSummary.textContent = selected
-    ? `Downloads ${selected.label || selected.name} as a full Persona package zip.`
-    : "Pick a Persona package to download its full folder.";
+    ? `Downloads ${selected.label || selected.name} as a full training package zip.`
+    : "Pick a training package to download its full folder.";
 }
 
 function updateTrainingResumeSummary() {
@@ -2223,7 +2568,7 @@ function renderTrainingResumeOptions() {
   }
 
   const packages = Array.isArray(state.pipaPackages)
-    ? state.pipaPackages.filter((entry) => String(entry?.package_mode || "persona-v1") === "persona-v1")
+    ? state.pipaPackages.filter((entry) => isResumablePersonaPackageMode(entry?.package_mode || "persona-v1"))
     : [];
   const previousValue = trainingResumePackageSelect.value;
   trainingResumePackageSelect.innerHTML = "";
@@ -2252,7 +2597,7 @@ function renderTrainingResumeOptions() {
 function downloadSelectedTrainingPackage() {
   if (!trainingPackageDownloadSelect || !trainingPackageDownloadSelect.value) {
     if (trainingPackageDownloadSummary) {
-      trainingPackageDownloadSummary.textContent = "Pick a Persona package before downloading.";
+      trainingPackageDownloadSummary.textContent = "Pick a training package before downloading.";
     }
     return;
   }
@@ -2262,7 +2607,7 @@ function downloadSelectedTrainingPackage() {
   if (trainingPackageDownloadSummary) {
     trainingPackageDownloadSummary.textContent = selected
       ? `Preparing ${selected.label || selectionName} for download...`
-      : "Preparing Persona package download...";
+      : "Preparing training package download...";
   }
 
   const link = document.createElement("a");
@@ -2578,20 +2923,8 @@ async function loadTrainingOptions() {
   if (payload.warning) {
     messages.push(`<strong>Heads up</strong><p>${payload.warning}</p>`);
   }
-  if (payload.phoneme_note) {
-    messages.push(`<p>${payload.phoneme_note}</p>`);
-  }
-  if (payload.rebuild_note) {
-    messages.push(`<p>${payload.rebuild_note}</p>`);
-  }
-  if (payload.training_plan_note) {
-    messages.push(`<p>${payload.training_plan_note}</p>`);
-  }
-  if (Array.isArray(payload.transcript_formats) && payload.transcript_formats.length) {
-    messages.push(
-      `<p><strong>Transcript formats</strong>: ${payload.transcript_formats.join(" | ")}.</p>`,
-    );
-  }
+  messages.push("<p><strong>Training modes</strong>: classic RVC + SUNO audition keeps `BASE*` as the real target-voice truth and uses `SUNO*` only for fixed checkpoint listening. Paired aligned conversion still uses `BASE*`, `TARGET*`, and `SUNO*` pairs. Concert remaster uses matched `CONCERT*` and `CD*` clips. Lyrics and persona plans are not used on this screen.</p>");
+  messages.push("<p>Checkpoint previews now render a fixed 10 second audition clip from your uploaded SUNO set whenever a new saved checkpoint appears, so we can judge the voice by ear instead of by loss alone.</p>");
 
   if (messages.length) {
     trainingWarning.classList.remove("hidden");
@@ -2599,6 +2932,23 @@ async function loadTrainingOptions() {
   } else {
     trainingWarning.classList.add("hidden");
     trainingWarning.innerHTML = "";
+  }
+  if (trainingOutputMode) {
+    const outputModes = Array.isArray(payload?.output_modes) ? payload.output_modes : [];
+    trainingOutputMode.innerHTML = outputModes.map((option) => (
+      `<option value="${escapeHtml(option.id || "")}">${escapeHtml(option.label || option.id || "Unknown mode")}</option>`
+    )).join("");
+    const defaultMode = String(payload?.defaults?.output_mode || "classic-rvc-support").trim().toLowerCase();
+    trainingOutputMode.value = Array.from(trainingOutputMode.options).some((option) => option.value === defaultMode)
+      ? defaultMode
+      : (trainingOutputMode.options[0]?.value || "classic-rvc-support");
+  }
+  if (trainingVersion) {
+    trainingVersion.innerHTML = '<option value="v2">Persona v1.1 / v1.0 backbone (v2)</option>';
+    trainingVersion.value = "v2";
+  }
+  if (trainingEpochMode) {
+    trainingEpochMode.value = "fixed";
   }
   syncTrainingRunModeUI();
 }
@@ -2676,11 +3026,11 @@ async function ensurePreviewSourceUploaded() {
 }
 
 function scheduleAutoPreview() {
-  resetPreviewState("Preview disabled", "Master Conversion uses the full-song pipeline instead of the old 5 second preview.");
+  resetPreviewState("Preview disabled", "Lead Builder now runs only the full direct-conversion path instead of the old 5 second preview.");
 }
 
 async function generateAutoPreview(requestToken) {
-  resetPreviewState("Preview disabled", "Master Conversion uses the full-song pipeline instead of the old 5 second preview.");
+  resetPreviewState("Preview disabled", "Lead Builder now runs only the full direct-conversion path instead of the old 5 second preview.");
   void requestToken;
   return;
   try {
@@ -2786,14 +3136,21 @@ function renderResults(job) {
       : "";
     const attempts = Number(job.repair_attempts || 0);
     const rebuilt = Number(job.repaired_word_count || 0);
-    const processLine =
-      attempts === 0 && rebuilt === 0
-        ? "Full blueprint conversion was used for the whole lead."
-        : `Weak regions tested: ${attempts}. Phrase gaps rebuilt: ${rebuilt}.`;
+    const directOnly = Boolean(job.direct_conversion_only);
+    const processLine = directOnly
+      ? "Direct model render only. No preprocessing, repair, or final cleanup was applied."
+      : (
+        attempts === 0 && rebuilt === 0
+          ? "Full blueprint conversion was used for the whole lead."
+          : `Weak regions tested: ${attempts}. Phrase gaps rebuilt: ${rebuilt}.`
+      );
+    const similarityLabel = directOnly
+      ? "Lyric similarity report on the direct render"
+      : "Best lyric similarity after cleanup";
     resultSummary.innerHTML = `
       <strong>Master Conversion finished</strong>
       <p>Source: ${job.source_name || "unknown song"}. Voice: ${job.model_name || "unknown model"}.${job.output_mode === "blend" ? ` Blend: ${Number(job.blend_percentage || 0)}% primary / ${100 - Number(job.blend_percentage || 0)}% ${job.secondary_model_name || "secondary"}.` : ""}</p>
-      <p>Best lyric similarity after cleanup: ${Number(job.best_similarity_score || 0).toFixed(2)}%. ${processLine}</p>
+      <p>${similarityLabel}: ${Number(job.best_similarity_score || 0).toFixed(2)}%. ${processLine}</p>
       <p>Timing: npy ${Number(job.timings?.npy || 0).toFixed(2)}s, f0 ${Number(job.timings?.f0 || 0).toFixed(2)}s, infer ${Number(job.timings?.infer || 0).toFixed(2)}s. Sample rate: ${Number(job.sample_rate || 0)} Hz.</p>
       ${job.best_word_report ? `<p>${job.best_word_report}</p>` : ""}
       ${job.best_letter_report ? `<p>${job.best_letter_report}</p>` : ""}
@@ -2903,19 +3260,49 @@ function renderGenerateResult(job) {
 function renderTrainingResult(job) {
   if (job.status === "completed") {
     trainingResultSummary.classList.remove("hidden");
-    const isLogicOnly = ["persona-v1", "pipa-logic-only"].includes(job.output_mode);
+    const selectedOutputMode = String(job.output_mode || "").trim().toLowerCase();
+    const modeConfig = getTrainingModeConfig(selectedOutputMode);
+    const isLogicOnly = isPersonaPackageMode(job.output_mode) || job.output_mode === "pipa-logic-only";
+    const directPairMode = selectedOutputMode === "persona-aligned-pth" || selectedOutputMode === "concert-remaster-paired";
+    const classicSupportMode = selectedOutputMode === "classic-rvc-support";
     const indexBlock = job.index_path
       ? `<div class="result-meta">Index: ${job.index_path}</div>`
-      : `<div class="result-meta">Index: not created (${isLogicOnly ? "Persona v1.0 does not use a legacy index" : (job.build_index ? "full bundle did not produce one" : "lite mode")})</div>`;
-    const outputModeLabel = isLogicOnly
-      ? "Persona v1.0"
-      : (job.output_mode === "pipa-lite" ? "PIPA lite" : "PIPA full");
+      : `<div class="result-meta">Index: not created (${isLogicOnly ? `${getPersonaPackageLabel(job.output_mode)} does not use a legacy index` : (job.build_index ? "full bundle did not produce one" : "lite mode")})</div>`;
+    const outputModeLabel = classicSupportMode
+      ? modeConfig.label
+      : directPairMode
+      ? modeConfig.label
+      : (isLogicOnly
+      ? getPersonaPackageLabel(job.output_mode)
+      : (job.output_mode === "pipa-lite" ? "PIPA lite" : "PIPA full"));
     const outputModeBlock = `<div class="result-meta">Output: ${outputModeLabel}</div>`;
-    const transcriptBlock = `<div class="result-meta">Transcript coverage: ${Number(job.matched_audio_files || 0)}/${Number(job.total_audio_files || 0)} matched, ${Number(job.skipped_audio_files || 0)} skipped.</div>`;
-    const referenceBlock = `<div class="result-meta">Reference bank: ${Number(job.reference_word_count || 0)} word refs, ${Number(job.reference_phrase_count || 0)} phrase refs.</div>`;
-    const recipeBlock = (Number(job.base_voice_clip_count || 0) || Number(job.paired_song_count || 0) || Number(job.depersonafied_variant_count || 0))
-      ? `<div class="result-meta">Recipe: ${Number(job.base_voice_clip_count || 0)} base voice clips | ${Number(job.paired_song_count || 0)} paired songs | ${Number(job.depersonafied_variant_count || 0)} de-personafied guides</div>`
-      : "";
+    const transcriptBlock = classicSupportMode
+      ? `<div class="result-meta">Dataset coverage: ${Number(job.base_voice_clip_count || 0)} BASE truth clips, ${Number(job.paired_song_count || 0)} extra target truth clips, ${Number(job.depersonafied_variant_count || 0)} SUNO audition clips, ${Number(job.skipped_audio_files || 0)} ignored.</div>`
+      : directPairMode
+      ? `<div class="result-meta">Alignment coverage: ${Number(job.matched_audio_files || 0)} matched ${modeConfig.targetName}/${modeConfig.sourceName} pairs across ${Number(job.total_audio_files || 0)} uploaded clips. Unused clips: ${Number(job.skipped_audio_files || 0)}.</div>`
+      : `<div class="result-meta">Transcript coverage: ${Number(job.matched_audio_files || 0)}/${Number(job.total_audio_files || 0)} matched, ${Number(job.skipped_audio_files || 0)} skipped.</div>`;
+    const referenceBlock = classicSupportMode
+      ? ""
+      : `<div class="result-meta">Reference bank: ${Number(job.reference_word_count || 0)} word refs, ${Number(job.reference_phrase_count || 0)} phrase refs.</div>`;
+    const recipeParts = [];
+    if (Number(job.base_voice_clip_count || 0)) {
+      recipeParts.push(`${Number(job.base_voice_clip_count || 0)} ${modeConfig.baseName || "BASE"} clips`);
+    }
+    if (Number(job.paired_song_count || 0)) {
+      recipeParts.push(
+        classicSupportMode
+          ? `${Number(job.paired_song_count || 0)} ${modeConfig.targetName} truth clips`
+          : `${Number(job.paired_song_count || 0)} ${modeConfig.targetName}/${modeConfig.sourceName} pairs`,
+      );
+    }
+    if (Number(job.depersonafied_variant_count || 0)) {
+      recipeParts.push(
+        classicSupportMode
+          ? `${Number(job.depersonafied_variant_count || 0)} ${modeConfig.sourceName} audition clips`
+          : `${Number(job.depersonafied_variant_count || 0)} aligned ${modeConfig.sourceName.toLowerCase()} sources`,
+      );
+    }
+    const recipeBlock = recipeParts.length ? `<div class="result-meta">Recipe: ${recipeParts.join(" | ")}</div>` : "";
     const planBlock = job.training_plan_path
       ? `<div class="result-meta">Persona plan: ${job.training_plan_path}</div>`
       : "";
@@ -2944,7 +3331,7 @@ function renderTrainingResult(job) {
       ? `<div class="result-meta">Pronunciation target preview: ${job.guided_regeneration_target_preview_path}</div>`
       : "";
     const guidedMetricsBlock = job.guided_regeneration_path
-      ? `<div class="result-meta">Voice-builder fit: best epoch ${Number(job.guided_regeneration_best_epoch || 0)} | best total ${Number(job.guided_regeneration_best_val_total || 0).toFixed(4)} | best mel ${Number(job.guided_regeneration_best_val_l1 || 0).toFixed(4)} | lyric phone acc ${(Number(job.guided_regeneration_best_lyric_phone_accuracy || 0) * 100).toFixed(1)}% | voicing ${(Number(job.guided_regeneration_best_vuv_accuracy || 0) * 100).toFixed(1)}% | plateau ${Number(job.guided_regeneration_plateau_epochs || 0)} epochs | training slices ${Number(job.guided_regeneration_sample_count || 0)}</div>`
+      ? `<div class="result-meta">Voice-builder fit: best epoch ${Number(job.guided_regeneration_best_epoch || 0)} | best total ${Number(job.guided_regeneration_best_val_total || 0).toFixed(4)} | best quality ${Number((job.guided_regeneration_best_quality ?? job.guided_regeneration_best_target_quality) || 0).toFixed(4)} | best mel ${Number(job.guided_regeneration_best_val_l1 || 0).toFixed(4)} | lyric phone acc ${(Number(job.guided_regeneration_best_lyric_phone_accuracy || 0) * 100).toFixed(1)}% | voicing ${(Number(job.guided_regeneration_best_vuv_accuracy || 0) * 100).toFixed(1)}% | plateau ${Number(job.guided_regeneration_plateau_epochs || 0)} epochs | training slices ${Number(job.guided_regeneration_sample_count || 0)}</div>`
       : "";
     const guidedHardwareBlock = job.guided_regeneration_hardware_summary
       ? `<div class="result-meta">Training hardware: ${job.guided_regeneration_hardware_summary}</div>`
@@ -2963,7 +3350,17 @@ function renderTrainingResult(job) {
       : "";
     trainingResultSummary.innerHTML = `
       <strong>${job.experiment_name} PIPA package is ready</strong>
-      <p>${isLogicOnly ? "Persona v1.0 trained the guide-conditioned voice-builder regenerator and pronunciation package without creating any legacy .pth backbone. This package is ready for the new conversion flow." : (job.stopped_early ? "The latest saved voice-builder and backbone checkpoints were packaged when you stopped training." : "Your trained PIPA package now includes both the guide-conditioned voice-builder regenerator and the RVC backbone:")}</p>
+      <p>${
+        classicSupportMode
+          ? "This package is ready as a base-first classic RVC conversion voice. BASE clips were kept as the real speaker truth, and the same SUNO audition source was rendered at each checkpoint so you can judge how the model handles that source domain by ear."
+          : directPairMode
+          ? (selectedOutputMode === "concert-remaster-paired"
+            ? "This package is ready for direct concert remaster conversion. It was trained from matched CONCERT/CD supervision, with extra detail-focused oversampling to push the model harder on the parts human ears notice first."
+            : "This package is ready for direct paired full-vocal conversion. It was trained from BASE identity clips plus matched TARGET/SUNO supervision, with extra detail-focused oversampling to push the model harder on the parts human ears notice first.")
+          : (isLogicOnly
+            ? "Persona v1.0 trained the guide-conditioned voice-builder regenerator and pronunciation package without creating any legacy .pth backbone. This package is ready for the new conversion flow."
+            : (job.stopped_early ? "The latest saved voice-builder and backbone checkpoints were packaged when you stopped training." : "Your trained PIPA package now includes both the guide-conditioned voice-builder regenerator and the RVC backbone:"))
+      }</p>
       ${isLogicOnly ? "" : `<div class="result-meta">${job.model_path || "weights file not found"}</div>`}
       ${outputModeBlock}
       ${indexBlock}
@@ -2984,14 +3381,63 @@ function renderTrainingResult(job) {
       ${rebuildProfileBlock}
       ${rebuildClipReportsBlock}
       ${transcriptBlock}
-      ${referenceBlock}
-      <p>This package now includes pronunciation references, guide-following rebuild metadata, and a direct vocal-regeneration checkpoint trained from pure-voice identity clips plus paired de-personafied to target song slices.</p>
-      <p>Refresh the Master Conversion voice package list to use it in one click.</p>
-    `;
+      ${directPairMode ? "" : referenceBlock}
+      <p>${
+        classicSupportMode
+          ? "Refresh Lead Builder to use this voice in the normal conversion flow. The latest checkpoint audition stays available below so you can compare what training actually sounded like."
+          : directPairMode
+          ? "Refresh Lead Builder to use this voice in the simplified direct conversion flow."
+          : "This package now includes pronunciation references, guide-following rebuild metadata, and a direct vocal-regeneration checkpoint trained from pure-voice identity clips plus paired de-personafied to target song slices."
+      }</p>
+        <p>${
+          directPairMode
+            ? "Lead Builder now shows conversion voices, so this model should appear there after refresh."
+            : "Refresh the Master Conversion voice package list to use it in one click."
+        }</p>
+      `;
   } else {
     trainingResultSummary.classList.add("hidden");
     trainingResultSummary.innerHTML = "";
   }
+}
+
+function renderTrainingCheckpointPreview(job) {
+  if (!trainingCheckpointPreview || !trainingCheckpointPreviewMeta || !trainingCheckpointPreviewPlayer) {
+    return;
+  }
+  const previewUrl = String(job?.checkpoint_preview_url || "").trim();
+  if (!previewUrl) {
+    trainingCheckpointPreview.classList.add("hidden");
+    trainingCheckpointPreviewMeta.innerHTML = "";
+    trainingCheckpointPreviewPlayer.pause();
+    trainingCheckpointPreviewPlayer.removeAttribute("src");
+    trainingCheckpointPreviewPlayer.load();
+    setManagedAudioVisible(trainingCheckpointPreviewPlayer, false);
+    return;
+  }
+  const epoch = Number(job?.checkpoint_preview_epoch || 0);
+  const sourceName = job?.checkpoint_preview_source_name || "checkpoint audition source";
+  const sourceRole = job?.checkpoint_preview_source_role || "SUNO";
+  const downloadName = job?.checkpoint_preview_download_name || `epoch_${String(epoch).padStart(5, "0")}.wav`;
+  const statusLine = job?.checkpoint_preview_status || `Latest checkpoint audition is ready from epoch ${epoch}.`;
+  const meta = `Checkpoint audition | Epoch ${epoch || "?"} | ${sourceRole} source: ${sourceName}`;
+
+  trainingCheckpointPreview.classList.remove("hidden");
+  setManagedAudioMeta(trainingCheckpointPreviewPlayer, downloadName, meta);
+  if ((trainingCheckpointPreviewPlayer.getAttribute("src") || "") !== previewUrl) {
+    trainingCheckpointPreviewPlayer.pause();
+    trainingCheckpointPreviewPlayer.currentTime = 0;
+    trainingCheckpointPreviewPlayer.src = previewUrl;
+    trainingCheckpointPreviewPlayer.load();
+  }
+  setManagedAudioVisible(trainingCheckpointPreviewPlayer, true);
+  trainingCheckpointPreviewMeta.innerHTML = `
+    <strong>Latest checkpoint audition</strong>
+    <p>${escapeHtml(statusLine)}</p>
+    <div class="result-links">
+      <a class="result-link" href="${escapeHtml(previewUrl)}" download="${escapeHtml(downloadName)}">Download audition</a>
+    </div>
+  `;
 }
 
 function renderDetagResult(job) {
@@ -3381,8 +3827,68 @@ function renderTouchUpResult(job) {
 }
 
 async function pollJob(jobId) {
-  const response = await fetch(`/api/master-conversion/jobs/${jobId}`);
+  const endpoint =
+    state.currentJobKind === "aligned-pth-conversion"
+      ? `/api/jobs/${jobId}`
+      : `/api/master-conversion/jobs/${jobId}`;
+  const response = await fetch(endpoint);
   const job = await response.json();
+  if (state.currentJobKind === "aligned-pth-conversion") {
+    const totalFiles = Math.max(1, Number(job.total_files || 0));
+    const completedFiles = Number(job.completed_files || 0);
+    const percent = Math.round((completedFiles / totalFiles) * 100);
+    const renderableResults = Array.isArray(job.results) ? [...job.results] : [];
+    if (!renderableResults.length && job.result_url) {
+      renderableResults.push({
+        name: job.current_file || job.download_name || "converted.wav",
+        url: job.result_url,
+        download_name: job.download_name || "converted.wav",
+        sample_rate: job.sample_rate || 0,
+        timings: job.timings || {},
+      });
+    }
+    if (job.status === "queued") {
+      setStatus("running", "Queued", job.message, 8);
+    } else if (job.status === "running") {
+      setStatus("running", "Paired conversion running", job.message, Math.max(percent, 12));
+    } else if (job.status === "completed") {
+      setStatus("completed", "Paired conversion complete", job.message, 100);
+      if (!renderableResults.length) {
+        if ((state.convertResultRetryCount || 0) < 1) {
+          state.convertResultRetryCount += 1;
+          resultSummary.classList.add("hidden");
+          resultSummary.innerHTML = "";
+          results.innerHTML = "";
+          clearInterval(state.pollHandle);
+          state.pollHandle = setTimeout(() => pollJob(state.currentJobId), 1200);
+          return;
+        }
+        resultSummary.classList.remove("hidden");
+        resultSummary.innerHTML = `
+          <strong>${state.currentConversionModelSystem || "Direct conversion"} finished</strong>
+          <p>The converted file completed, but the output list did not return a downloadable audio URL.</p>
+        `;
+        results.innerHTML = "";
+        clearInterval(state.pollHandle);
+        state.pollHandle = null;
+        return;
+      }
+      state.convertResultRetryCount = 0;
+      try {
+        renderDirectConversionCompletion(job, renderableResults);
+      } catch (error) {
+        renderDirectConversionFallback(job, renderableResults, error);
+      }
+      clearInterval(state.pollHandle);
+      state.pollHandle = null;
+    } else if (job.status === "failed") {
+      setStatus("failed", "Failed", job.error || job.message, percent);
+      clearInterval(state.pollHandle);
+      state.pollHandle = null;
+    }
+    return;
+  }
+
   const percent = Number(job.progress || 0);
 
   if (job.status === "queued") {
@@ -3579,53 +4085,62 @@ async function pollTouchUpJob(jobId) {
 }
 
 async function pollTrainingJob(jobId) {
-  const response = await fetch(`/api/training/jobs/${jobId}`);
-  const job = await response.json();
-  const percent = Number(job.progress || 0);
-  const historyText = Array.isArray(job.log_history) && job.log_history.length
-    ? job.log_history.join("\n")
-    : (job.log_tail || job.message || "Training logs will appear here.");
-  if (trainingLog.textContent !== historyText) {
-    trainingLog.textContent = historyText;
-    trainingLog.scrollTop = trainingLog.scrollHeight;
+  if (!jobId || state.trainingPollInFlight) {
+    return;
   }
+  state.trainingPollInFlight = true;
+  try {
+    const response = await fetch(`/api/training/jobs/${jobId}`);
+    const job = await response.json();
+    const percent = Number(job.progress || 0);
+    const historyText = Array.isArray(job.log_history) && job.log_history.length
+      ? job.log_history.join("\n")
+      : (job.log_tail || job.message || "Training logs will appear here.");
+    if (trainingLog.textContent !== historyText) {
+      trainingLog.textContent = historyText;
+      trainingLog.scrollTop = trainingLog.scrollHeight;
+    }
+    renderTrainingCheckpointPreview(job);
 
-  if (job.status === "queued") {
-    setTrainingStatus("running", "Queued", job.message, 8);
-    stopTrainingButton.disabled = false;
-  } else if (job.status === "running") {
-    const stageLabel = job.stage ? `${job.stage}: ` : "";
-    setTrainingStatus(
-      "running",
-      job.stop_requested ? "Stopping..." : "Building PIPA",
-      `${stageLabel}${job.message}`,
-      Math.max(percent, 10),
-    );
-    stopTrainingButton.disabled = Boolean(job.stop_requested);
-  } else if (job.status === "completed") {
-    setTrainingStatus("completed", "PIPA complete", job.message, 100);
-    renderTrainingResult(job);
-    await loadModels();
-    stopTrainingButton.disabled = true;
-    state.currentTrainingJobId = null;
-    clearInterval(state.trainingPollHandle);
-    state.trainingPollHandle = null;
-  } else if (job.status === "stopped") {
-    setTrainingStatus("completed", "Training stopped", job.message, percent);
-    trainingLog.textContent = historyText;
-    renderTrainingResult(job);
-    stopTrainingButton.disabled = true;
-    state.currentTrainingJobId = null;
-    clearInterval(state.trainingPollHandle);
-    state.trainingPollHandle = null;
-  } else if (job.status === "failed") {
-    setTrainingStatus("failed", "PIPA build failed", job.error || job.message, percent);
-    trainingLog.textContent = job.error || historyText || "Training failed.";
-    renderTrainingResult(job);
-    stopTrainingButton.disabled = true;
-    state.currentTrainingJobId = null;
-    clearInterval(state.trainingPollHandle);
-    state.trainingPollHandle = null;
+    if (job.status === "queued") {
+      setTrainingStatus("running", "Queued", job.message, 8);
+      stopTrainingButton.disabled = false;
+    } else if (job.status === "running") {
+      const stageLabel = job.stage ? `${job.stage}: ` : "";
+      setTrainingStatus(
+        "running",
+        job.stop_requested ? "Stopping..." : "Building PIPA",
+        `${stageLabel}${job.message}`,
+        Math.max(percent, 10),
+      );
+      stopTrainingButton.disabled = Boolean(job.stop_requested);
+    } else if (job.status === "completed") {
+      setTrainingStatus("completed", "PIPA complete", job.message, 100);
+      renderTrainingResult(job);
+      await loadModels();
+      stopTrainingButton.disabled = true;
+      state.currentTrainingJobId = null;
+      clearInterval(state.trainingPollHandle);
+      state.trainingPollHandle = null;
+    } else if (job.status === "stopped") {
+      setTrainingStatus("completed", "Training stopped", job.message, percent);
+      trainingLog.textContent = historyText;
+      renderTrainingResult(job);
+      stopTrainingButton.disabled = true;
+      state.currentTrainingJobId = null;
+      clearInterval(state.trainingPollHandle);
+      state.trainingPollHandle = null;
+    } else if (job.status === "failed") {
+      setTrainingStatus("failed", "PIPA build failed", job.error || job.message, percent);
+      trainingLog.textContent = job.error || historyText || "Training failed.";
+      renderTrainingResult(job);
+      stopTrainingButton.disabled = true;
+      state.currentTrainingJobId = null;
+      clearInterval(state.trainingPollHandle);
+      state.trainingPollHandle = null;
+    }
+  } finally {
+    state.trainingPollInFlight = false;
   }
 }
 
@@ -3655,46 +4170,86 @@ async function pollDetagJob(jobId) {
 }
 
 async function startConversion() {
-  if (!state.models.length) {
+  const leadBuilderModels = getLeadBuilderModels();
+  if (!leadBuilderModels.length) {
     setStatus(
       "failed",
-      "No persona voices found",
-      "Train or add a Persona v1.0 voice before running conversion.",
+      "No conversion voices found",
+      "Add a classic RVC .pth voice or train a base-first or paired conversion voice in Voice Builder before running Lead Builder.",
     );
     return;
   }
   if (!state.files.length) {
     setStatus(
       "failed",
-      "No lead vocal selected",
-      "Attach one lead vocal file first.",
+      "No SUNO vocal selected",
+      "Attach one isolated SUNO vocal file first.",
     );
     return;
   }
-  if (!(masterLyrics?.value || "").trim()) {
+  const selectedModel = getLeadBuilderSelectedModel();
+  if (!selectedModel || !isLeadBuilderConversionModel(selectedModel)) {
     setStatus(
       "failed",
-      "Missing lyrics",
-      "Paste the exact lyrics so Persona v1.0 can align and rebuild the lead correctly.",
+      "Wrong voice type selected",
+      "Lead Builder only runs classic RVC .pth voices plus the base-first and paired conversion voices built in Voice Builder.",
       0,
     );
     return;
   }
+  const selectedModelLabel = selectedModel.label || selectedModel.name || "selected voice";
+  const selectedModelSystem = selectedModel.system || "Direct conversion";
+  state.currentConversionModelName = selectedModel.name || "";
+  state.currentConversionModelLabel = selectedModelLabel;
+  state.currentConversionModelSystem = selectedModelSystem;
 
   const data = new FormData();
   data.append("model_name", modelSelect.value);
-  data.append("lyrics", masterLyrics?.value || "");
-  data.append("quality_preset", qualityPreset.value);
   const sourceFile = state.files[0];
-  data.append("source_file", sourceFile, sourceFile.name);
+  data.append("output_mode", "single");
+  data.append("quality_preset", qualityPreset.value);
+  data.append("output_format", "wav");
+  data.append("preprocess_mode", "off");
+  data.append("preprocess_strength", "10");
+  data.append("speaker_id", "0");
+  data.append("transpose", "0");
+  data.append("pitch_method", "");
+  data.append("index_path", "");
+  data.append("index_rate", "-1");
+  data.append("filter_radius", "-1");
+  data.append("resample_sr", "0");
+  data.append("rms_mix_rate", "-1");
+  data.append("protect", "-1");
+  data.append("crepe_hop_length", "-1");
+  data.append("files", sourceFile, sourceFile.name);
 
   startButton.disabled = true;
-  setStatus("running", "Uploading lead vocal", "Sending the lead vocal, lyrics, quality preset, and persona voice to the backend...", 6);
+  state.convertResultRetryCount = 0;
+  setStatus(
+    "running",
+    "Uploading SUNO vocal",
+    `Sending the isolated SUNO vocal and ${selectedModelLabel} to the backend for direct conversion...`,
+    6,
+  );
   results.innerHTML = "";
   resultSummary.classList.add("hidden");
+  previewMeta.classList.add("hidden");
+  previewMeta.innerHTML = "";
+  previewPlayer.pause();
+  previewPlayer.removeAttribute("src");
+  previewPlayer.load();
+  previewPlayer.classList.add("hidden");
+  setManagedAudioVisible(previewPlayer, false);
+  setPreviewStatus(
+    "running",
+    "Waiting for converted output",
+    "The finished direct conversion will appear here the moment the backend returns the file.",
+    6,
+  );
 
   try {
-    const response = await fetch("/api/master-conversion/jobs", {
+    state.currentJobKind = "aligned-pth-conversion";
+    const response = await fetch("/api/jobs", {
       method: "POST",
       body: data,
     });
@@ -3708,7 +4263,7 @@ async function startConversion() {
   } catch (error) {
     setStatus(
       "failed",
-      "Could not start Master Conversion",
+      "Could not start direct conversion",
       error.message || String(error),
       0,
     );
@@ -3718,7 +4273,7 @@ async function startConversion() {
 }
 
 async function startGenerate() {
-  if (!state.models.length) {
+  if (!getPersonaRepairModels().length) {
     setGenerateStatus(
       "failed",
       "No persona voices found",
@@ -3796,6 +4351,11 @@ async function startGenerate() {
 }
 
 async function startTraining() {
+  const selectedOutputMode = trainingOutputMode.value || "classic-rvc-support";
+  const modeConfig = getTrainingModeConfig(selectedOutputMode);
+  const trainingSummary = summarizeTrainingFiles(state.trainingFiles, selectedOutputMode);
+  const directPairMode = selectedOutputMode === "persona-aligned-pth" || selectedOutputMode === "concert-remaster-paired";
+  const classicSupportMode = selectedOutputMode === "classic-rvc-support";
   if (!state.trainingFiles.length) {
     setTrainingStatus(
       "failed",
@@ -3805,11 +4365,29 @@ async function startTraining() {
     );
     return;
   }
-  if (!state.trainingTranscriptFiles.length && !state.trainingPlanFiles.length) {
+  if (selectedOutputMode === "persona-aligned-pth" && trainingSummary.baseCount < 1) {
     setTrainingStatus(
       "failed",
-      "No plan or transcripts selected",
-      "Add a persona training plan or matching transcript files before building a PIPA model.",
+      "Missing BASE clips",
+      "Add at least one long target identity clip named with the BASE prefix before starting training.",
+      0,
+    );
+    return;
+  }
+  if (classicSupportMode && trainingSummary.baseCount < 1) {
+    setTrainingStatus(
+      "failed",
+      "Missing BASE clips",
+      "Add at least one clean target identity clip named with the BASE prefix before starting the classic RVC run.",
+      0,
+    );
+    return;
+  }
+  if (directPairMode && (trainingSummary.targetCount < 1 || trainingSummary.sourceCount < 1 || trainingSummary.matchedPairCount < 1)) {
+    setTrainingStatus(
+      "failed",
+      `No matched ${modeConfig.targetName}/${modeConfig.sourceName} pairs`,
+      `Add matching aligned files like ${modeConfig.targetName}_phrase01.wav and ${modeConfig.sourceName}_phrase01.wav before building the model.`,
       0,
     );
     return;
@@ -3820,14 +4398,9 @@ async function startTraining() {
   data.append("sample_rate", trainingSampleRate.value);
   data.append("version", trainingVersion.value);
   data.append("f0_method", trainingF0Method.value);
-  data.append("output_mode", trainingOutputMode.value || "pipa-full");
-  data.append("epoch_mode", trainingEpochMode?.value || "manual-stop");
-  data.append("alignment_tolerance", trainingAlignmentTolerance?.value || "forgiving");
-  const curriculumPlan = getTrainingCurriculumPlan();
-  data.append("total_epochs", String(curriculumPlan.fixedTotal || 1));
-  data.append("warmup_stage_epochs", String(curriculumPlan.warmup || 0));
-  data.append("bridge_stage_epochs", String(curriculumPlan.bridge || 0));
-  data.append("full_diversity_stage_epochs", String(curriculumPlan.full || 0));
+  data.append("output_mode", selectedOutputMode);
+  data.append("epoch_mode", "fixed");
+  data.append("total_epochs", String(clampTrainingEpochInput(trainingEpochs, 600)));
   data.append("save_every_epoch", trainingSaveEvery.value || "25");
   data.append("batch_size", trainingBatchSize.value || "4");
   data.append("crepe_hop_length", trainingCrepeHopLength.value || "128");
@@ -3848,11 +4421,18 @@ async function startTraining() {
   setTrainingStatus(
     "running",
     "Uploading dataset",
-    "Sending your audio, persona plan, and transcript data to the backend...",
+    classicSupportMode
+      ? "Sending your BASE truth clips and SUNO checkpoint-audition clips to the backend..."
+      : directPairMode
+      ? (selectedOutputMode === "concert-remaster-paired"
+        ? "Sending your CONCERT/CD aligned audio clips to the backend..."
+        : "Sending your BASE/TARGET/SUNO aligned audio clips to the backend...")
+      : "Sending your audio, persona plan, and transcript data to the backend...",
     6,
   );
   trainingResultSummary.classList.add("hidden");
   trainingLog.textContent = "Training logs will appear here.";
+  renderTrainingCheckpointPreview({});
 
   try {
     const response = await fetch("/api/training/jobs", {
@@ -3865,11 +4445,12 @@ async function startTraining() {
     }
     trainingName.value = payload.experiment_name || trainingName.value;
     state.currentTrainingJobId = payload.job_id;
+    state.trainingPollInFlight = false;
     stopTrainingButton.disabled = false;
     await pollTrainingJob(state.currentTrainingJobId);
     state.trainingPollHandle = setInterval(
       () => pollTrainingJob(state.currentTrainingJobId),
-      2000,
+      500,
     );
   } catch (error) {
     setTrainingStatus(
@@ -4594,12 +5175,8 @@ bindIfPresent(trainingPackageDownloadSelect, "change", updateTrainingPackageDown
 bindIfPresent(downloadTrainingPackageButton, "click", downloadSelectedTrainingPackage);
 bindIfPresent(trainingResumePackageSelect, "change", () => {
   updateTrainingResumeSummary();
-  updateTrainingCurriculumSummary();
 });
-bindIfPresent(trainingStartPhase, "change", updateTrainingCurriculumSummary);
-bindIfPresent(trainingWarmupEpochs, "input", updateTrainingCurriculumSummary);
-bindIfPresent(trainingBridgeEpochs, "input", updateTrainingCurriculumSummary);
-bindIfPresent(trainingFullDiversityEpochs, "input", updateTrainingCurriculumSummary);
+bindIfPresent(trainingEpochs, "input", updateTrainingCurriculumSummary);
 
 bindIfPresent(pitchPreset, "change", () => {
   customPitchField.classList.toggle("hidden", pitchPreset.value !== "custom");
@@ -4742,14 +5319,16 @@ renderTrainingTranscriptFiles();
 hydrateManagedAudio(document);
 setManagedAudioMeta(previewPlayer, "Preview", "Auto preview player");
 setManagedAudioVisible(previewPlayer, false);
+setManagedAudioMeta(trainingCheckpointPreviewPlayer, "Checkpoint audition", "Latest training checkpoint preview");
+setManagedAudioVisible(trainingCheckpointPreviewPlayer, false);
 setManagedAudioMeta(albumPreviewPlayer, "Album mix", "Current album playback");
 setActiveTab("convert");
 
 Promise.all([loadModels(), loadMasterConversionOptions(), loadGenerateOptions(), loadIsolatorOptions(), loadMasteringOptions(), loadOptimizeOptions(), loadAlbumOptions(), loadApiComposeOptions(), loadTrainingOptions()]).then(() => {
   setStatus(
     "idle",
-    "Ready for lead rebuild",
-    "Choose the target voice, add one isolated guide vocal, paste the lyrics, and run the final lead build when you are ready.",
+    "Ready for direct conversion",
+    "Choose a base-first or paired conversion voice, add one isolated vocal, and run direct conversion when you are ready.",
   );
   setGenerateStatus(
     "idle",
@@ -4759,7 +5338,7 @@ Promise.all([loadModels(), loadMasterConversionOptions(), loadGenerateOptions(),
   setPreviewStatus(
     "idle",
     "Preview disabled",
-    "Master Conversion uses the full-song pipeline instead of the old 5 second preview.",
+    "Lead Builder now runs only the full direct-conversion path instead of the old 5 second preview.",
   );
   setTouchUpStatus(
     "idle",
@@ -4793,8 +5372,8 @@ Promise.all([loadModels(), loadMasterConversionOptions(), loadGenerateOptions(),
   );
   setTrainingStatus(
     "idle",
-    "Waiting for clips",
-    "Upload training clips and start the run.",
+    "Waiting for training audio",
+    "Upload BASE clips and, if you want fixed auditions, SUNO clips. Then start the build.",
   );
   return loadAlbumProjects(true);
 }).catch((error) => {

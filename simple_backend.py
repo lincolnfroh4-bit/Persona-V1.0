@@ -24,6 +24,16 @@ from lib.infer_pack.models import (
 )
 from simple_pipa import PIPAModelStore
 
+DIRECT_GUIDED_PACKAGE_MODES = {
+    "concert-remaster-paired",
+}
+ALIGNED_PTH_PACKAGE_MODES = {
+    "persona-aligned-pth",
+}
+CLASSIC_SUPPORT_PACKAGE_MODES = {
+    "classic-rvc-support",
+}
+
 
 class SimpleRVCBackend:
     HIGH_END_ROFORMER_MODEL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
@@ -210,6 +220,36 @@ class SimpleRVCBackend:
             return sorted(fuzzy_matches)[0].as_posix()
         return ""
 
+    def _find_classic_weight_path(self, requested: str) -> Optional[Path]:
+        target = str(requested or "").strip()
+        if not target:
+            return None
+
+        normalized = target.lower()
+        candidates = sorted(
+            (path for path in self.weights_root.glob("*.pth") if path.is_file()),
+            key=lambda path: (int(path.stat().st_mtime_ns), path.name),
+            reverse=True,
+        )
+        exact_matches = [
+            path
+            for path in candidates
+            if path.stem.lower() == normalized
+            or path.name.lower() == normalized
+            or path.name.lower() == f"{normalized}.pth"
+        ]
+        if exact_matches:
+            return exact_matches[0]
+
+        fuzzy_matches = [
+            path
+            for path in candidates
+            if normalized in path.stem.lower() or normalized in path.name.lower()
+        ]
+        if fuzzy_matches:
+            return fuzzy_matches[0]
+        return None
+
     def list_models(self) -> List[Dict[str, object]]:
         signature = self._build_model_listing_signature()
         if (
@@ -219,13 +259,100 @@ class SimpleRVCBackend:
             return [dict(model) for model in self._model_listing_cache]
 
         models: List[Dict[str, object]] = []
+        index_files = [
+            file
+            for file in self.logs_root.rglob("*.index")
+            if file.is_file() and "trained" not in file.name.lower()
+        ]
         pipa_models = self.pipa_store.list_bundles()
         for bundle in pipa_models:
             manifest_path = str(bundle.get("manifest_path", "") or "").strip()
             guided_regeneration_path = str(
                 bundle.get("guided_regeneration_path", "") or ""
             ).strip()
-            if not manifest_path or not guided_regeneration_path:
+            package_mode = str(bundle.get("package_mode", "persona-v1") or "persona-v1")
+            model_path = str(bundle.get("model_path", "") or "").strip()
+            default_index = str(bundle.get("default_index", "") or "").strip()
+            if not manifest_path:
+                continue
+            if package_mode in DIRECT_GUIDED_PACKAGE_MODES:
+                if not guided_regeneration_path:
+                    continue
+                model_label = (
+                    "Concert remaster"
+                    if package_mode == "concert-remaster-paired"
+                    else "Paired aligned conversion"
+                )
+                models.append(
+                    {
+                        "name": str(bundle["name"]),
+                        "label": str(bundle.get("label", bundle["name"])),
+                        "default_index": default_index,
+                        "has_index": bool(default_index),
+                        "kind": "model",
+                        "system": model_label,
+                        "rvc_model_name": Path(guided_regeneration_path).name,
+                        "model_path": "",
+                        "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
+                        "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
+                        "reference_bank_path": str(bundle.get("reference_bank_path", "") or ""),
+                        "manifest_path": manifest_path,
+                        "guided_regeneration_path": guided_regeneration_path,
+                        "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
+                        "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
+                        "package_mode": package_mode,
+                    }
+                )
+                continue
+            if package_mode in ALIGNED_PTH_PACKAGE_MODES:
+                if not model_path:
+                    continue
+                models.append(
+                    {
+                        "name": str(bundle["name"]),
+                        "label": str(bundle.get("label", bundle["name"])),
+                        "default_index": default_index,
+                        "has_index": bool(default_index),
+                        "kind": "model",
+                        "system": "Paired aligned conversion",
+                        "rvc_model_name": str(bundle.get("rvc_model_name", "") or Path(model_path).name),
+                        "model_path": model_path,
+                        "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
+                        "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
+                        "reference_bank_path": str(bundle.get("reference_bank_path", "") or ""),
+                        "manifest_path": manifest_path,
+                        "guided_regeneration_path": guided_regeneration_path,
+                        "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
+                        "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
+                        "package_mode": package_mode,
+                    }
+                )
+                continue
+            if package_mode in CLASSIC_SUPPORT_PACKAGE_MODES:
+                if not model_path:
+                    continue
+                models.append(
+                    {
+                        "name": str(bundle["name"]),
+                        "label": str(bundle.get("label", bundle["name"])),
+                        "default_index": default_index,
+                        "has_index": bool(default_index),
+                        "kind": "model",
+                        "system": "Classic RVC + SUNO audition",
+                        "rvc_model_name": str(bundle.get("rvc_model_name", "") or Path(model_path).name),
+                        "model_path": model_path,
+                        "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
+                        "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
+                        "reference_bank_path": str(bundle.get("reference_bank_path", "") or ""),
+                        "manifest_path": manifest_path,
+                        "guided_regeneration_path": "",
+                        "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
+                        "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
+                        "package_mode": package_mode,
+                    }
+                )
+                continue
+            if not guided_regeneration_path:
                 continue
             models.append(
                 {
@@ -234,7 +361,7 @@ class SimpleRVCBackend:
                     "default_index": "",
                     "has_index": False,
                     "kind": "persona",
-                    "system": "Persona v1.0",
+                    "system": "Persona v1.1" if package_mode == "persona-v1.1" else "Persona v1.0",
                     "rvc_model_name": "",
                     "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
                     "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
@@ -243,7 +370,35 @@ class SimpleRVCBackend:
                     "guided_regeneration_path": guided_regeneration_path,
                     "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
                     "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
-                    "package_mode": str(bundle.get("package_mode", "persona-v1") or "persona-v1"),
+                    "package_mode": package_mode,
+                }
+            )
+
+        classic_weight_paths = sorted(
+            (path for path in self.weights_root.glob("*.pth") if path.is_file()),
+            key=lambda path: (int(path.stat().st_mtime_ns), path.name),
+            reverse=True,
+        )
+        for path in classic_weight_paths:
+            default_index = self._find_default_index_from_list(path.name, index_files)
+            models.append(
+                {
+                    "name": path.stem,
+                    "label": path.stem,
+                    "default_index": default_index,
+                    "has_index": bool(default_index),
+                    "kind": "classic",
+                    "system": "Classic RVC",
+                    "rvc_model_name": path.name,
+                    "model_path": path.as_posix(),
+                    "phoneme_profile_path": "",
+                    "rebuild_profile_path": "",
+                    "reference_bank_path": "",
+                    "manifest_path": "",
+                    "guided_regeneration_path": "",
+                    "guided_regeneration_report_path": "",
+                    "guided_regeneration_preview_path": "",
+                    "package_mode": "classic-rvc",
                 }
             )
 
@@ -257,19 +412,93 @@ class SimpleRVCBackend:
             raise FileNotFoundError("No model was selected.")
         bundle = self.pipa_store.resolve_bundle(requested)
         if bundle is not None:
+            package_mode = str(bundle.get("package_mode", "persona-v1") or "persona-v1")
+            manifest_path = str(bundle.get("manifest_path", "") or "").strip()
+            if package_mode in DIRECT_GUIDED_PACKAGE_MODES:
+                guided_regeneration_path = str(bundle.get("guided_regeneration_path", "") or "").strip()
+                if not guided_regeneration_path or not manifest_path:
+                    raise FileNotFoundError(
+                        "That direct paired package is missing its guided checkpoint files."
+                    )
+                return {
+                    "selection_name": str(bundle["name"]),
+                    "label": str(bundle["label"]),
+                    "kind": "model",
+                    "system": "Concert remaster" if package_mode == "concert-remaster-paired" else "Paired aligned conversion",
+                    "rvc_model_name": Path(guided_regeneration_path).name,
+                    "model_path": "",
+                    "default_index": str(bundle.get("default_index", "") or ""),
+                    "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
+                    "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
+                    "reference_bank_path": str(bundle.get("reference_bank_path", "") or ""),
+                    "manifest_path": manifest_path,
+                    "guided_regeneration_path": guided_regeneration_path,
+                    "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
+                    "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
+                    "package_mode": package_mode,
+                }
+            if package_mode in ALIGNED_PTH_PACKAGE_MODES:
+                model_path = str(bundle.get("model_path", "") or "").strip()
+                if not model_path or not manifest_path:
+                    raise FileNotFoundError(
+                        "That aligned PTH package is missing its backbone model files."
+                    )
+                return {
+                    "selection_name": str(bundle["name"]),
+                    "label": str(bundle["label"]),
+                    "kind": "model",
+                    "system": "Paired aligned conversion",
+                    "rvc_model_name": str(bundle.get("rvc_model_name", "") or Path(model_path).name),
+                    "model_path": model_path,
+                    "default_index": str(bundle.get("default_index", "") or ""),
+                    "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
+                    "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
+                    "reference_bank_path": str(bundle.get("reference_bank_path", "") or ""),
+                    "manifest_path": manifest_path,
+                    "guided_regeneration_path": str(bundle.get("guided_regeneration_path", "") or ""),
+                    "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
+                    "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
+                    "package_mode": package_mode,
+                }
+            if package_mode in CLASSIC_SUPPORT_PACKAGE_MODES:
+                model_path = str(bundle.get("model_path", "") or "").strip()
+                if not model_path or not manifest_path:
+                    raise FileNotFoundError(
+                        "That classic RVC support package is missing its backbone model files."
+                    )
+                return {
+                    "selection_name": str(bundle["name"]),
+                    "label": str(bundle["label"]),
+                    "kind": "model",
+                    "system": "Classic RVC + SUNO audition",
+                    "rvc_model_name": str(bundle.get("rvc_model_name", "") or Path(model_path).name),
+                    "model_path": model_path,
+                    "default_index": str(bundle.get("default_index", "") or ""),
+                    "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
+                    "rebuild_profile_path": str(bundle.get("rebuild_profile_path", "") or ""),
+                    "reference_bank_path": str(bundle.get("reference_bank_path", "") or ""),
+                    "manifest_path": manifest_path,
+                    "guided_regeneration_path": "",
+                    "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
+                    "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
+                    "package_mode": package_mode,
+                }
             guided_regeneration_path = str(
                 bundle.get("guided_regeneration_path", "") or ""
             ).strip()
-            manifest_path = str(bundle.get("manifest_path", "") or "").strip()
             if not guided_regeneration_path or not manifest_path:
                 raise FileNotFoundError(
-                    "That persona package is missing its Persona v1.0 builder files."
+                    "That Persona package is missing its builder files."
                 )
             return {
                 "selection_name": str(bundle["name"]),
                 "label": str(bundle["label"]),
                 "kind": "persona",
-                "system": "Persona v1.0",
+                "system": (
+                    "Persona v1.1"
+                    if package_mode == "persona-v1.1"
+                    else "Persona v1.0"
+                ),
                 "rvc_model_name": "",
                 "default_index": "",
                 "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
@@ -280,6 +509,32 @@ class SimpleRVCBackend:
                 "guided_regeneration_report_path": str(bundle.get("guided_regeneration_report_path", "") or ""),
                 "guided_regeneration_preview_path": str(bundle.get("guided_regeneration_preview_path", "") or ""),
                 "package_mode": str(bundle.get("package_mode", "persona-v1") or "persona-v1"),
+            }
+
+        classic_model_path = self._find_classic_weight_path(requested)
+        if classic_model_path is not None:
+            index_files = [
+                file
+                for file in self.logs_root.rglob("*.index")
+                if file.is_file() and "trained" not in file.name.lower()
+            ]
+            default_index = self._find_default_index_from_list(classic_model_path.name, index_files)
+            return {
+                "selection_name": classic_model_path.stem,
+                "label": classic_model_path.stem,
+                "kind": "classic",
+                "system": "Classic RVC",
+                "rvc_model_name": classic_model_path.name,
+                "model_path": classic_model_path.as_posix(),
+                "default_index": default_index,
+                "phoneme_profile_path": "",
+                "rebuild_profile_path": "",
+                "reference_bank_path": "",
+                "manifest_path": "",
+                "guided_regeneration_path": "",
+                "guided_regeneration_report_path": "",
+                "guided_regeneration_preview_path": "",
+                "package_mode": "classic-rvc",
             }
 
         raise FileNotFoundError(f"Persona package not found: {requested}")
@@ -383,12 +638,18 @@ class SimpleRVCBackend:
     def _ensure_model_loaded(self, model_name: str) -> None:
         resolved = self.resolve_model_reference(model_name)
         resolved_model_name = str(resolved["rvc_model_name"])
-        if self.current_model_name == resolved_model_name and self.net_g is not None:
-            return
-
-        model_path = self.weights_root / resolved_model_name
+        resolved_model_path = str(resolved.get("model_path", "") or "")
+        if not resolved_model_path and not resolved_model_name:
+            raise FileNotFoundError(
+                "Selected Persona package does not contain a legacy .pth backbone model."
+            )
+        model_path = Path(resolved_model_path) if resolved_model_path else (self.weights_root / resolved_model_name)
         if not model_path.exists():
             raise FileNotFoundError(f"Model not found: {model_path}")
+        model_mtime_ns = int(model_path.stat().st_mtime_ns)
+        cache_key = f"{(resolved_model_path or resolved_model_name)}::{model_mtime_ns}"
+        if self.current_model_name == cache_key and self.net_g is not None:
+            return
 
         cpt = torch.load(model_path, map_location="cpu")
         tgt_sr = cpt["config"][-1]
@@ -426,7 +687,7 @@ class SimpleRVCBackend:
                 "The legacy RVC conversion path requires optional dependencies that are not installed in the current Python environment."
             ) from exc
 
-        self.current_model_name = resolved_model_name
+        self.current_model_name = cache_key
         self.net_g = net_g
         self.cpt = cpt
         self.tgt_sr = tgt_sr
@@ -1572,6 +1833,46 @@ class SimpleRVCBackend:
         crepe_hop_length: int = 120,
     ) -> Dict[str, object]:
         with self.lock:
+            resolved = self.resolve_model_reference(model_name)
+            package_mode = str(resolved.get("package_mode", "") or "").strip().lower()
+            if package_mode in DIRECT_GUIDED_PACKAGE_MODES:
+                guided_regeneration_path = str(resolved.get("guided_regeneration_path", "") or "").strip()
+                guided_config_path = str(resolved.get("guided_regeneration_config_path", "") or "").strip()
+                guided_manifest_path = str(resolved.get("manifest_path", "") or "").strip()
+                guided_report_path = str(resolved.get("guided_regeneration_report_path", "") or "").strip()
+                if not guided_regeneration_path or not guided_manifest_path:
+                    raise FileNotFoundError(
+                        "Selected direct paired package is missing its guided checkpoint files."
+                    )
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_wav = (
+                    output_path
+                    if output_path.suffix.lower() == ".wav"
+                    else output_path.with_suffix(".wav")
+                )
+                synthesis_metadata = self.pipa_store.guided_svs.synthesize_direct_guide_v11(
+                    checkpoint_path=Path(guided_regeneration_path),
+                    guide_audio_path=input_path,
+                    output_path=temp_wav,
+                    config_path=(Path(guided_config_path) if guided_config_path else None),
+                    manifest_path=(Path(guided_manifest_path) if guided_manifest_path else None),
+                    training_report_path=(Path(guided_report_path) if guided_report_path else None),
+                )
+                if output_path.suffix.lower() != ".wav":
+                    self._transcode_audio(temp_wav, output_path)
+                    temp_wav.unlink(missing_ok=True)
+                return {
+                    "sample_rate": int(synthesis_metadata.get("sample_rate", 44100)),
+                    "index_path": "",
+                    "timings": {
+                        "npy": 0.0,
+                        "f0": 0.0,
+                        "infer": round(float(synthesis_metadata.get("synthesis_seconds", 0.0)), 2),
+                    },
+                    "preprocess_applied": False,
+                    "preprocess_mode": "off",
+                }
+
             self._ensure_hubert_loaded()
             self._ensure_model_loaded(model_name)
 

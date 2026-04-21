@@ -59,11 +59,113 @@ ALBUMS_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "albums"
 GENERATE_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "generate"
 MASTER_CONVERSION_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "master-conversion"
 REBUILD_ROOT = REPO_ROOT / "audio-outputs" / "simple-web" / "rebuild"
+PERSONA_OUTPUT_MODES = {
+    "persona-v1",
+    "persona-v1.1",
+    "persona-lyric-repair",
+    "persona-aligned-pth",
+    "concert-remaster-paired",
+}
+DIRECT_DATASET_OUTPUT_MODES = {
+    "persona-aligned-pth",
+    "concert-remaster-paired",
+    "classic-rvc-support",
+}
+PERSONA_LOGIC_OUTPUT_MODES = {
+    "persona-v1",
+    "persona-v1.1",
+    "persona-lyric-repair",
+    "persona-aligned-pth",
+    "concert-remaster-paired",
+    "pipa-logic-only",
+}
 
 # The original RVC codebase relies on many repo-relative paths like "rmvpe.pt".
 # Force the working directory to the repo root so those legacy paths resolve
 # correctly even when this server is launched from somewhere else.
 os.chdir(REPO_ROOT)
+
+
+def _is_persona_output_mode(output_mode: str) -> bool:
+    return str(output_mode or "").strip().lower() in PERSONA_OUTPUT_MODES
+
+
+def _is_persona_logic_output_mode(output_mode: str) -> bool:
+    return str(output_mode or "").strip().lower() in PERSONA_LOGIC_OUTPUT_MODES
+
+
+def _persona_output_label(output_mode: str) -> str:
+    normalized = str(output_mode or "").strip().lower()
+    if normalized == "classic-rvc-support":
+        return "Classic RVC + SUNO audition"
+    if normalized == "persona-v1.1":
+        return "Persona v1.1"
+    if normalized == "persona-lyric-repair":
+        return "Persona lyric repair"
+    if normalized == "persona-aligned-pth":
+        return "Persona aligned PTH"
+    if normalized == "concert-remaster-paired":
+        return "Concert remaster"
+    return "Persona v1.0"
+
+
+def _normalize_training_output_mode(output_mode: str) -> str:
+    normalized = str(output_mode or "").strip().lower()
+    alias_map = {
+        "persona-v1.1": "persona-v1.1",
+        "persona v1.1": "persona-v1.1",
+        "persona 1.1": "persona-v1.1",
+        "v1.1": "persona-v1.1",
+        "persona-v11": "persona-v1.1",
+        "persona v11": "persona-v1.1",
+        "persona-v1": "persona-v1",
+        "persona v1": "persona-v1",
+        "persona v1.0": "persona-v1",
+        "persona 1.0": "persona-v1",
+        "v1": "persona-v1",
+        "v1.0": "persona-v1",
+        "persona-lyric-repair": "persona-lyric-repair",
+        "persona lyric repair": "persona-lyric-repair",
+        "lyric-repair": "persona-lyric-repair",
+        "persona-aligned-pth": "persona-aligned-pth",
+        "persona aligned pth": "persona-aligned-pth",
+        "aligned-pth": "persona-aligned-pth",
+        "classic-rvc-support": "classic-rvc-support",
+        "classic rvc support": "classic-rvc-support",
+        "classic rvc + suno audition": "classic-rvc-support",
+        "classic-rvc": "classic-rvc-support",
+        "classic rvc": "classic-rvc-support",
+        "concert-remaster-paired": "concert-remaster-paired",
+        "concert remaster paired": "concert-remaster-paired",
+        "concert remaster": "concert-remaster-paired",
+        "concert-remaster": "concert-remaster-paired",
+        "pipa-full": "pipa-full",
+        "pipa-lite": "pipa-lite",
+        "pipa-logic-only": "pipa-logic-only",
+        "persona v1.1 / v1.0 backbone (v2)": "v2",
+        "persona v1.1 / v1.0 backbone": "v2",
+    }
+    return alias_map.get(normalized, normalized)
+
+
+def _resolve_training_output_mode_fallback(
+    output_mode: str,
+    *,
+    version: str,
+    transcript_files: Sequence[UploadFile],
+    plan_files: Sequence[UploadFile],
+) -> str:
+    normalized = _normalize_training_output_mode(output_mode)
+    supported_modes = PERSONA_OUTPUT_MODES | DIRECT_DATASET_OUTPUT_MODES | {"pipa-full", "pipa-lite", "pipa-logic-only"}
+    if normalized in supported_modes:
+        return normalized
+
+    has_alignment_inputs = not transcript_files and not plan_files
+    if has_alignment_inputs:
+        return "classic-rvc-support"
+    if str(version or "").strip().lower() == "v2":
+        return "persona-v1.1"
+    return "persona-v1"
 
 QUALITY_PRESETS = {
     "fast": {
@@ -170,6 +272,10 @@ class JobState:
     current_file: str = ""
     created_at: float = field(default_factory=time.time)
     results: List[JobResult] = field(default_factory=list)
+    result_url: str = ""
+    download_name: str = ""
+    sample_rate: int = 0
+    timings: Dict[str, float] = field(default_factory=dict)
     zip_url: str = ""
     error: str = ""
 
@@ -182,6 +288,10 @@ class JobState:
             "completed_files": self.completed_files,
             "current_file": self.current_file,
             "created_at": self.created_at,
+            "result_url": self.result_url,
+            "download_name": self.download_name,
+            "sample_rate": self.sample_rate,
+            "timings": self.timings,
             "zip_url": self.zip_url,
             "error": self.error,
             "results": [
@@ -222,6 +332,7 @@ class MasterConversionJobState:
     secondary_model_name: str = ""
     blend_percentage: int = 50
     sample_rate: int = 0
+    direct_conversion_only: bool = False
     best_similarity_score: float = 0.0
     best_word_report: str = ""
     best_letter_report: str = ""
@@ -265,6 +376,7 @@ class MasterConversionJobState:
             "secondary_model_name": self.secondary_model_name,
             "blend_percentage": self.blend_percentage,
             "sample_rate": self.sample_rate,
+            "direct_conversion_only": self.direct_conversion_only,
             "best_similarity_score": self.best_similarity_score,
             "best_word_report": self.best_word_report,
             "best_letter_report": self.best_letter_report,
@@ -376,7 +488,7 @@ class TrainingJobState:
     id: str
     experiment_name: str
     build_index: bool = False
-    output_mode: str = "persona-v1"
+    output_mode: str = "classic-rvc-support"
     epoch_mode: str = "manual-stop"
     status: str = "queued"
     stage: str = "queued"
@@ -405,6 +517,7 @@ class TrainingJobState:
     guided_regeneration_target_preview_path: str = ""
     guided_regeneration_best_val_l1: float = 0.0
     guided_regeneration_best_val_total: float = 0.0
+    guided_regeneration_best_target_quality: float = 0.0
     guided_regeneration_best_epoch: int = 0
     guided_regeneration_best_phone_accuracy: float = 0.0
     guided_regeneration_best_lyric_phone_accuracy: float = 0.0
@@ -425,6 +538,12 @@ class TrainingJobState:
     base_voice_clip_count: int = 0
     paired_song_count: int = 0
     depersonafied_variant_count: int = 0
+    checkpoint_preview_url: str = ""
+    checkpoint_preview_download_name: str = ""
+    checkpoint_preview_epoch: int = 0
+    checkpoint_preview_source_name: str = ""
+    checkpoint_preview_source_role: str = ""
+    checkpoint_preview_status: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -460,6 +579,7 @@ class TrainingJobState:
             "guided_regeneration_target_preview_path": self.guided_regeneration_target_preview_path,
             "guided_regeneration_best_val_l1": self.guided_regeneration_best_val_l1,
             "guided_regeneration_best_val_total": self.guided_regeneration_best_val_total,
+            "guided_regeneration_best_target_quality": self.guided_regeneration_best_target_quality,
             "guided_regeneration_best_epoch": self.guided_regeneration_best_epoch,
             "guided_regeneration_best_phone_accuracy": self.guided_regeneration_best_phone_accuracy,
             "guided_regeneration_best_lyric_phone_accuracy": self.guided_regeneration_best_lyric_phone_accuracy,
@@ -480,6 +600,12 @@ class TrainingJobState:
             "base_voice_clip_count": self.base_voice_clip_count,
             "paired_song_count": self.paired_song_count,
             "depersonafied_variant_count": self.depersonafied_variant_count,
+            "checkpoint_preview_url": self.checkpoint_preview_url,
+            "checkpoint_preview_download_name": self.checkpoint_preview_download_name,
+            "checkpoint_preview_epoch": self.checkpoint_preview_epoch,
+            "checkpoint_preview_source_name": self.checkpoint_preview_source_name,
+            "checkpoint_preview_source_role": self.checkpoint_preview_source_role,
+            "checkpoint_preview_status": self.checkpoint_preview_status,
         }
 
 
@@ -849,6 +975,13 @@ def _normalize_training_start_phase(start_phase: str) -> str:
         "warmup": "warm-up",
         "bridge": "curriculum-bridge",
         "full": "full-diversity",
+        "fit": "general-refine",
+        "targetfit": "general-refine",
+        "refine": "general-refine",
+        "general": "general-refine",
+        "generalrefine": "general-refine",
+        "post": "general-refine",
+        "postprocess": "general-refine",
     }.get(normalized, normalized)
 
 
@@ -859,49 +992,84 @@ def _resolve_curriculum_run_plan(
     warmup_stage_epochs: int,
     bridge_stage_epochs: int,
     full_diversity_stage_epochs: int,
+    general_refine_stage_epochs: int,
+    target_fit_stage_epochs: int = 0,
+    post_process_stage_epochs: int = 0,
 ) -> Dict[str, int | str]:
     normalized_start_phase = _normalize_training_start_phase(start_phase)
     current_epoch = max(0, int(resume_epoch))
     warmup_epochs = max(0, int(warmup_stage_epochs))
     bridge_epochs = max(0, int(bridge_stage_epochs))
     full_epochs = max(0, int(full_diversity_stage_epochs))
+    general_refine_epochs = (
+        max(0, int(general_refine_stage_epochs))
+        + max(0, int(target_fit_stage_epochs))
+        + max(0, int(post_process_stage_epochs))
+    )
     if normalized_start_phase == "warm-up":
         warmup_remaining = warmup_epochs
         bridge_remaining = bridge_epochs
         full_remaining = full_epochs
+        general_refine_remaining = general_refine_epochs
     elif normalized_start_phase == "curriculum-bridge":
         warmup_remaining = 0
         bridge_remaining = bridge_epochs
         full_remaining = full_epochs
+        general_refine_remaining = general_refine_epochs
     elif normalized_start_phase == "full-diversity":
         warmup_remaining = 0
         bridge_remaining = 0
         full_remaining = full_epochs
+        general_refine_remaining = general_refine_epochs
+    elif normalized_start_phase == "general-refine":
+        warmup_remaining = 0
+        bridge_remaining = 0
+        full_remaining = 0
+        general_refine_remaining = general_refine_epochs
     else:
         warmup_end_epoch = warmup_epochs
         bridge_end_epoch = warmup_epochs + bridge_epochs
+        full_end_epoch = bridge_end_epoch + full_epochs
+        general_refine_end_epoch = full_end_epoch + general_refine_epochs
         if current_epoch < warmup_end_epoch:
             warmup_remaining = warmup_end_epoch - current_epoch
             bridge_remaining = bridge_epochs
             full_remaining = full_epochs
+            general_refine_remaining = general_refine_epochs
         elif current_epoch < bridge_end_epoch:
             warmup_remaining = 0
             bridge_remaining = bridge_end_epoch - current_epoch
             full_remaining = full_epochs
+            general_refine_remaining = general_refine_epochs
+        elif current_epoch < full_end_epoch:
+            warmup_remaining = 0
+            bridge_remaining = 0
+            full_remaining = full_end_epoch - current_epoch
+            general_refine_remaining = general_refine_epochs
+        elif current_epoch < general_refine_end_epoch:
+            warmup_remaining = 0
+            bridge_remaining = 0
+            full_remaining = 0
+            general_refine_remaining = general_refine_end_epoch - current_epoch
         else:
             warmup_remaining = 0
             bridge_remaining = 0
-            full_remaining = full_epochs
-    total_remaining = warmup_remaining + bridge_remaining + full_remaining
+            full_remaining = 0
+            general_refine_remaining = general_refine_epochs
+    total_remaining = warmup_remaining + bridge_remaining + full_remaining + general_refine_remaining
     if total_remaining < 1:
-        full_remaining = max(1, full_remaining)
-        total_remaining = warmup_remaining + bridge_remaining + full_remaining
+        if general_refine_epochs > 0 or normalized_start_phase == "general-refine":
+            general_refine_remaining = max(1, general_refine_remaining)
+        else:
+            full_remaining = max(1, full_remaining)
+        total_remaining = warmup_remaining + bridge_remaining + full_remaining + general_refine_remaining
     return {
         "start_phase": normalized_start_phase,
         "resume_epoch": int(current_epoch),
         "warmup_remaining_epochs": int(warmup_remaining),
         "bridge_remaining_epochs": int(bridge_remaining),
         "full_diversity_remaining_epochs": int(full_remaining),
+        "general_refine_remaining_epochs": int(general_refine_remaining),
         "fixed_total_epochs": int(total_remaining),
     }
 
@@ -1031,6 +1199,34 @@ def get_job(job_id: str) -> JobState:
         job = jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
+    if job.status == "completed" and not job.results:
+        job_root = JOBS_ROOT / job_id / "outputs"
+        if job_root.exists():
+            audio_suffixes = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
+            audio_files = sorted(
+                path for path in job_root.iterdir() if path.is_file() and path.suffix.lower() in audio_suffixes
+            )
+            if audio_files:
+                fallback_path = audio_files[0]
+                fallback_url = f"/downloads/simple-web/jobs/{job_id}/outputs/{fallback_path.name}"
+                job.result_url = job.result_url or fallback_url
+                job.download_name = job.download_name or fallback_path.name
+                if not job.sample_rate:
+                    job.sample_rate = 0
+                if not job.timings:
+                    job.timings = {"npy": 0.0, "f0": 0.0, "infer": 0.0}
+                job.results.append(
+                    JobResult(
+                        name=fallback_path.name,
+                        url=fallback_url,
+                        download_name=fallback_path.name,
+                        sample_rate=job.sample_rate,
+                        timings=dict(job.timings),
+                        index_path="",
+                        preprocess_applied=False,
+                        preprocess_mode="off",
+                    )
+                )
     return job
 
 
@@ -1160,6 +1356,116 @@ def set_training_job_state(job_id: str, **updates) -> None:
         if job.stage:
             message = f"{job.stage}: {message}"
     log_progress_bar("training", job_id, status, progress, message)
+
+
+class TrainingCheckpointPreviewController:
+    def __init__(
+        self,
+        *,
+        job_id: str,
+        experiment_name: str,
+        preview_source_path: Path,
+        preview_source_name: str,
+        preview_source_role: str,
+        preview_output_dir: Path,
+        f0_method: str,
+        crepe_hop_length: int,
+    ):
+        self.job_id = job_id
+        self.experiment_name = experiment_name
+        self.preview_source_path = preview_source_path
+        self.preview_source_name = preview_source_name
+        self.preview_source_role = preview_source_role
+        self.preview_output_dir = preview_output_dir
+        self.f0_method = f0_method
+        self.crepe_hop_length = crepe_hop_length
+        self._lock = threading.Lock()
+        self._worker: Optional[threading.Thread] = None
+        self._pending_epoch: Optional[int] = None
+        self.latest_output_path: str = ""
+        self.latest_epoch: int = 0
+
+    def enqueue(self, payload: Dict[str, object]) -> None:
+        epoch = max(0, int(payload.get("epoch", 0) or 0))
+        if epoch <= 0 or not self.preview_source_path.exists():
+            return
+        with self._lock:
+            if epoch <= self.latest_epoch and self._pending_epoch is None:
+                return
+            self._pending_epoch = epoch
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(target=self._run, daemon=True)
+                self._worker.start()
+
+    def wait_for_idle(self) -> None:
+        while True:
+            with self._lock:
+                worker = self._worker
+            if worker is None:
+                return
+            worker.join(timeout=0.2)
+            with self._lock:
+                if self._worker is worker and not worker.is_alive():
+                    self._worker = None
+                    return
+
+    def _run(self) -> None:
+        while True:
+            with self._lock:
+                epoch = self._pending_epoch
+                self._pending_epoch = None
+            if epoch is None:
+                break
+            preview_output_path = self.preview_output_dir / f"epoch_{epoch:05d}.wav"
+            preview_work_dir = self.preview_output_dir / f"work_{epoch:05d}"
+            reset_directory(preview_work_dir)
+            set_training_job_state(
+                self.job_id,
+                checkpoint_preview_status=(
+                    f"Rendering a live audition from checkpoint epoch {epoch} using "
+                    f"{self.preview_source_role or 'preview'} source {self.preview_source_name or self.preview_source_path.name}."
+                ),
+            )
+            try:
+                backend.convert_file(
+                    model_name=self.experiment_name,
+                    input_path=self.preview_source_path,
+                    output_path=preview_output_path,
+                    preprocess_mode="off",
+                    preprocess_strength=10,
+                    work_dir=preview_work_dir,
+                    f0_method=self.f0_method,
+                    index_path="",
+                    index_rate=0.0,
+                    filter_radius=3,
+                    resample_sr=0,
+                    rms_mix_rate=0.25,
+                    protect=0.33,
+                    crepe_hop_length=self.crepe_hop_length,
+                )
+                self.latest_output_path = str(preview_output_path)
+                self.latest_epoch = epoch
+                set_training_job_state(
+                    self.job_id,
+                    checkpoint_preview_url=audio_output_url(preview_output_path),
+                    checkpoint_preview_download_name=preview_output_path.name,
+                    checkpoint_preview_epoch=epoch,
+                    checkpoint_preview_source_name=self.preview_source_name or self.preview_source_path.name,
+                    checkpoint_preview_source_role=self.preview_source_role,
+                    checkpoint_preview_status=(
+                        f"Latest checkpoint audition is ready from epoch {epoch}."
+                    ),
+                )
+            except Exception as exc:
+                set_training_job_state(
+                    self.job_id,
+                    checkpoint_preview_status=(
+                        f"Checkpoint audition failed at epoch {epoch}: {exc}"
+                    ),
+                )
+        with self._lock:
+            if self._pending_epoch is None:
+                self._worker = None
 
 
 def set_detag_job_state(job_id: str, **updates) -> None:
@@ -2478,6 +2784,11 @@ def start_conversion_job(
             )
             with jobs_lock:
                 jobs[job_id].results.append(result)
+                if not jobs[job_id].result_url:
+                    jobs[job_id].result_url = relative_url
+                    jobs[job_id].download_name = output_name
+                    jobs[job_id].sample_rate = int(metadata["sample_rate"])
+                    jobs[job_id].timings = dict(metadata["timings"])
 
         zip_path = job_root / f"{job_id}.zip"
         create_zip(zip_path, output_dir)
@@ -2512,7 +2823,7 @@ def start_master_conversion_job(
                 status="running",
                 stage="analysis",
                 progress=6,
-                message="Preparing the full song and reading the lyric guide.",
+                message="Preparing the direct model render.",
             )
 
             job_root = MASTER_CONVERSION_ROOT / job_id
@@ -2529,12 +2840,10 @@ def start_master_conversion_job(
             def progress_stage(progress_value: float) -> str:
                 progress_number = float(progress_value)
                 if progress_number < 34:
-                    return "source analysis"
-                if progress_number < 64:
                     return "voice conversion"
                 if progress_number < 94:
-                    return "pronunciation repair"
-                return "final cleanup"
+                    return "direct render"
+                return "reporting"
 
             metadata = master_conversion_engine.run(
                 model_name=model_name,
@@ -2576,8 +2885,9 @@ def start_master_conversion_job(
                 status="completed",
                 stage="done",
                 progress=100,
-                message="Master Conversion finished. Review the prepared source, repaired vocal, and final output below.",
+                message="Direct model conversion finished. Review the raw render and final output below.",
                 sample_rate=int(metadata["sample_rate"]),
+                direct_conversion_only=bool(metadata.get("direct_conversion_only", False)),
                 best_similarity_score=float(metadata.get("best_similarity_score", 0.0)),
                 best_word_report=str(metadata.get("best_word_report", "")),
                 best_letter_report=str(metadata.get("best_letter_report", "")),
@@ -2898,11 +3208,21 @@ def start_training_job(
     with training_stop_events_lock:
         cancel_event = training_stop_events.setdefault(job_id, threading.Event())
     requested_output_mode = str(
-        settings.get("output_mode", "persona-v1") or "persona-v1"
+        settings.get("output_mode", "classic-rvc-support") or "classic-rvc-support"
     )
+    classic_support_mode = requested_output_mode == "classic-rvc-support"
+    recipe_mode = (
+        requested_output_mode
+        if (_is_persona_output_mode(requested_output_mode) or classic_support_mode)
+        else "persona-v1"
+    )
+    direct_pair_recipe_mode = requested_output_mode in {
+        "persona-aligned-pth",
+        "concert-remaster-paired",
+    }
     output_mode = (
         "pipa-logic-only"
-        if requested_output_mode in {"persona-v1", "pipa-logic-only"}
+        if requested_output_mode in PERSONA_LOGIC_OUTPUT_MODES and not direct_pair_recipe_mode
         else requested_output_mode
     )
     resume_selection_name = str(settings.get("resume_selection_name", "") or "").strip()
@@ -2910,6 +3230,19 @@ def start_training_job(
     warmup_stage_epochs = max(0, int(settings.get("warmup_stage_epochs", 200)))
     bridge_stage_epochs = max(0, int(settings.get("bridge_stage_epochs", 500)))
     full_diversity_stage_epochs = max(0, int(settings.get("full_diversity_stage_epochs", 500)))
+    general_refine_stage_epochs = max(
+        0,
+        int(
+            settings.get(
+                "general_refine_stage_epochs",
+                max(
+                    int(settings.get("target_fit_stage_epochs", 0) or 0)
+                    + int(settings.get("post_process_stage_epochs", 0) or 0),
+                    180,
+                ),
+            )
+        ),
+    )
 
     def map_guided_training_progress(raw_progress: int) -> int:
         normalized = max(0, min(int(raw_progress), 100))
@@ -2954,15 +3287,36 @@ def start_training_job(
         resume_report_path = None
         resume_epoch_hint = 0
         if resume_bundle is not None:
-            latest_checkpoint = Path(
-                str(
-                    resume_bundle.get("guided_regeneration_latest_path", "")
-                    or resume_bundle.get("guided_regeneration_path", "")
-                    or ""
-                )
+            normalized_resume_phase = _normalize_training_start_phase(start_phase)
+            resume_bundle_mode = str(resume_bundle.get("package_mode", "persona-v1") or "persona-v1").strip().lower()
+            reform_legacy_persona_to_v11 = (
+                recipe_mode == "persona-v1.1"
+                and resume_bundle_mode != "persona-v1.1"
             )
-            if latest_checkpoint.exists():
-                resume_checkpoint_path = latest_checkpoint
+            raw_best_checkpoint = str(resume_bundle.get("guided_regeneration_path", "") or "").strip()
+            raw_latest_checkpoint = str(resume_bundle.get("guided_regeneration_latest_path", "") or "").strip()
+            best_checkpoint = Path(raw_best_checkpoint) if raw_best_checkpoint else None
+            latest_checkpoint = Path(raw_latest_checkpoint) if raw_latest_checkpoint else None
+            prefer_best_checkpoint = reform_legacy_persona_to_v11 or normalized_resume_phase in {
+                "warm-up",
+                "curriculum-bridge",
+                "full-diversity",
+            }
+            checkpoint_candidates = (
+                [best_checkpoint, latest_checkpoint]
+                if prefer_best_checkpoint
+                else [latest_checkpoint, best_checkpoint]
+            )
+            selected_checkpoint = next(
+                (
+                    candidate
+                    for candidate in checkpoint_candidates
+                    if candidate is not None and candidate.exists() and candidate.is_file()
+                ),
+                None,
+            )
+            if selected_checkpoint is not None:
+                resume_checkpoint_path = selected_checkpoint
             else:
                 raise FileNotFoundError(
                     f"Resume checkpoint for '{resume_selection_name}' is missing."
@@ -2972,22 +3326,28 @@ def start_training_job(
                 candidate_report = Path(raw_resume_report)
                 if candidate_report.exists():
                     resume_report_path = candidate_report
-            resume_epoch_hint = max(
+            base_resume_epoch_hint = max(
                 0,
                 int(
-                    resume_bundle.get(
-                        "guided_regeneration_last_epoch",
-                        resume_bundle.get("last_epoch", 0),
+                    (
+                        resume_bundle.get("guided_regeneration_best_epoch", 0)
+                        if prefer_best_checkpoint and best_checkpoint is not None and resume_checkpoint_path == best_checkpoint
+                        else resume_bundle.get(
+                            "guided_regeneration_last_epoch",
+                            resume_bundle.get("last_epoch", 0),
+                        )
                     )
                     or 0
                 ),
             )
+            resume_epoch_hint = 0 if reform_legacy_persona_to_v11 else base_resume_epoch_hint
         run_plan = _resolve_curriculum_run_plan(
             start_phase=start_phase,
             resume_epoch=resume_epoch_hint,
             warmup_stage_epochs=warmup_stage_epochs,
             bridge_stage_epochs=bridge_stage_epochs,
             full_diversity_stage_epochs=full_diversity_stage_epochs,
+            general_refine_stage_epochs=general_refine_stage_epochs,
         )
         guided_total_epochs = int(run_plan["fixed_total_epochs"])
         if str(settings.get("epoch_mode", "manual-stop") or "manual-stop") != "fixed":
@@ -3002,6 +3362,7 @@ def start_training_job(
             audio_paths=audio_paths,
             transcript_paths=transcript_paths,
             plan_paths=plan_paths,
+            output_mode=output_mode,
             output_dir=pipa_build_dir,
             alignment_tolerance=str(settings["alignment_tolerance"]),
             update_status=lambda stage, message, log_tail, progress: set_training_job_state(
@@ -3013,66 +3374,112 @@ def start_training_job(
             ),
             cancel_event=cancel_event,
         )
-
-        guided_regeneration_dir = pipa_build_dir / "guided_regeneration"
-        guided_metadata = backend.pipa_store.train_guided_regenerator(
-            dataset_dir=Path(str(prep_metadata["guided_svs_dataset_dir"])),
-            output_dir=guided_regeneration_dir,
-            total_epochs=guided_total_epochs,
-            save_every_epoch=int(settings["save_every_epoch"]),
-            batch_size=int(settings["batch_size"]),
-            update_status=lambda stage, message, log_tail, progress: set_training_job_state(
-                job_id,
-                stage=stage,
-                message=message,
-                log_tail=log_tail,
-                progress=map_guided_training_progress(progress),
-            ),
-            cancel_event=cancel_event,
-            resume_checkpoint_path=resume_checkpoint_path,
-            resume_report_path=resume_report_path,
-            start_phase=start_phase,
-            warmup_stage_epochs=warmup_stage_epochs,
-            bridge_stage_epochs=bridge_stage_epochs,
-            full_diversity_stage_epochs=full_diversity_stage_epochs,
-        )
-
-        guided_dataset_features_dir = Path(str(prep_metadata["guided_svs_dataset_dir"])) / "features"
-        if guided_dataset_features_dir.exists():
-            shutil.rmtree(guided_dataset_features_dir, ignore_errors=True)
-
-        skip_backbone = output_mode == "pipa-logic-only" or cancel_event.is_set()
-        if skip_backbone:
+        guided_metadata: Dict[str, object] = {"recipe_mode": recipe_mode}
+        late_phase_summary = ""
+        checkpoint_preview_controller: Optional[TrainingCheckpointPreviewController] = None
+        direct_pair_mode = recipe_mode in {"persona-aligned-pth", "concert-remaster-paired"}
+        if direct_pair_mode:
+            direct_dataset_dir = Path(str(prep_metadata.get("guided_svs_dataset_dir", "") or ""))
+            if not direct_dataset_dir.exists():
+                raise RuntimeError("The direct paired converter dataset was not created.")
+            direct_pair_tail = (
+                f"Concert clips {int(prep_metadata.get('base_voice_clip_count', 0))} | "
+                f"CD pairs {int(prep_metadata.get('paired_song_count', 0))} | "
+                if recipe_mode == "concert-remaster-paired"
+                else (
+                    f"Base clips {int(prep_metadata.get('base_voice_clip_count', 0))} | "
+                    f"TARGET/SUNO pairs {int(prep_metadata.get('paired_song_count', 0))} | "
+                )
+            )
             set_training_job_state(
                 job_id,
-                stage="logic-only",
+                stage="aligned-direct",
                 message=(
-                    "Skipping all legacy backbone stages and packaging the Persona v1.0 voice-builder assets."
-                    if output_mode == "pipa-logic-only"
-                    else "Stop requested before any legacy backbone stage. Packaging the Persona v1.0 voice-builder assets now."
+                    "Training the concert remaster paired converter from the curated CONCERT/CD set..."
+                    if recipe_mode == "concert-remaster-paired"
+                    else "Training the direct paired aligned converter from the curated BASE/TARGET/SUNO set..."
                 ),
-                progress=94,
+                progress=32,
                 log_tail=(
-                    f"Best epoch {int(guided_metadata.get('best_epoch', 0))} | "
-                    f"best total {float(guided_metadata.get('best_val_total', 0.0)):.4f} | "
-                    f"lyric phone acc {float(guided_metadata.get('best_lyric_phone_accuracy', 0.0)) * 100.0:.1f}% | "
-                    f"plateau {int(guided_metadata.get('plateau_epochs', 0))} epochs | "
-                    "No legacy .pth or index assets will be created for this package."
+                    f"{direct_pair_tail}"
+                    f"direct slices {int(prep_metadata.get('guided_svs_sample_count', 0))} | "
+                    f"frames {int(prep_metadata.get('guided_svs_total_frames', 0))}"
                 ),
             )
+            guided_regeneration_dir = pipa_build_dir / "guided_regeneration"
+            guided_metadata = backend.pipa_store.train_guided_regenerator(
+                dataset_dir=direct_dataset_dir,
+                output_dir=guided_regeneration_dir,
+                total_epochs=guided_total_epochs,
+                save_every_epoch=int(settings["save_every_epoch"]),
+                batch_size=int(settings["batch_size"]),
+                requested_num_workers=int(settings.get("worker_count", -1)),
+                recipe_mode=recipe_mode,
+                update_status=lambda stage, message, log_tail, progress: set_training_job_state(
+                    job_id,
+                    stage=stage,
+                    message=message,
+                    log_tail=log_tail,
+                    progress=map_guided_training_progress(progress),
+                ),
+                cancel_event=cancel_event,
+                resume_checkpoint_path=resume_checkpoint_path,
+                resume_report_path=resume_report_path,
+                start_phase=start_phase,
+                warmup_stage_epochs=warmup_stage_epochs,
+                bridge_stage_epochs=bridge_stage_epochs,
+                full_diversity_stage_epochs=full_diversity_stage_epochs,
+                general_refine_stage_epochs=general_refine_stage_epochs,
+            )
             metadata = {
-                "experiment_name": experiment_name,
                 "model_path": "",
                 "index_path": "",
-                "index_built": "0",
                 "index_summary": "",
-                "train_log_path": "",
+                "index_built": "0",
                 "stopped_early": "1" if cancel_event.is_set() or bool(guided_metadata.get("stopped_early", False)) else "0",
             }
-        else:
+        elif classic_support_mode:
+            classic_dataset_dir = Path(str(prep_metadata.get("classic_rvc_dataset_dir", "") or ""))
+            if not classic_dataset_dir.exists():
+                raise RuntimeError("The classic RVC support dataset was not created.")
+            preview_source_path = Path(str(prep_metadata.get("preview_source_path", "") or ""))
+            preview_output_dir = REPO_ROOT / "audio-outputs" / "simple-web" / "training" / job_id / "checkpoint-previews"
+            reset_directory(preview_output_dir)
+            if preview_source_path.exists():
+                checkpoint_preview_controller = TrainingCheckpointPreviewController(
+                    job_id=job_id,
+                    experiment_name=experiment_name,
+                    preview_source_path=preview_source_path,
+                    preview_source_name=str(prep_metadata.get("preview_source_name", "") or preview_source_path.name),
+                    preview_source_role=str(prep_metadata.get("preview_source_role", "SUNO") or "SUNO"),
+                    preview_output_dir=preview_output_dir,
+                    f0_method=str(settings["f0_method"]),
+                    crepe_hop_length=int(settings["crepe_hop_length"]),
+                )
+                set_training_job_state(
+                    job_id,
+                    checkpoint_preview_source_name=str(prep_metadata.get("preview_source_name", "") or preview_source_path.name),
+                    checkpoint_preview_source_role=str(prep_metadata.get("preview_source_role", "SUNO") or "SUNO"),
+                    checkpoint_preview_status=(
+                        f"Checkpoint auditions will use {str(prep_metadata.get('preview_source_role', 'SUNO') or 'SUNO')} "
+                        f"source {str(prep_metadata.get('preview_source_name', '') or preview_source_path.name)}."
+                    ),
+                )
+            set_training_job_state(
+                job_id,
+                stage="classic-rvc",
+                message="Training the base-first classic RVC model and listening against the fixed audition clip...",
+                progress=32,
+                log_tail=(
+                    f"BASE truth clips {int(prep_metadata.get('base_voice_clip_count', 0))} | "
+                    f"extra target truth clips {int(prep_metadata.get('paired_song_count', 0))} | "
+                    f"SUNO audition clips {int(prep_metadata.get('depersonafied_variant_count', 0))} | "
+                    f"preview source {str(prep_metadata.get('preview_source_name', 'none') or 'none')}"
+                ),
+            )
             metadata = trainer.run_training(
                 experiment_name=experiment_name,
-                dataset_dir=dataset_dir,
+                dataset_dir=classic_dataset_dir,
                 sample_rate=str(settings["sample_rate"]),
                 version=str(settings["version"]),
                 f0_method=str(settings["f0_method"]),
@@ -3089,11 +3496,119 @@ def start_training_job(
                     progress=progress,
                 ),
                 cancel_event=cancel_event,
+                checkpoint_callback=(
+                    checkpoint_preview_controller.enqueue
+                    if checkpoint_preview_controller is not None
+                    else None
+                ),
             )
+            if checkpoint_preview_controller is not None:
+                checkpoint_preview_controller.wait_for_idle()
+                guided_metadata.update(
+                    {
+                        "recipe_mode": recipe_mode,
+                        "preview_path": checkpoint_preview_controller.latest_output_path,
+                        "quality_summary": str(
+                            prep_metadata.get("preview_source_name", "")
+                            or preview_source_path.name
+                        ),
+                    }
+                )
+        else:
+            guided_regeneration_dir = pipa_build_dir / "guided_regeneration"
+            guided_metadata = backend.pipa_store.train_guided_regenerator(
+                dataset_dir=Path(str(prep_metadata["guided_svs_dataset_dir"])),
+                output_dir=guided_regeneration_dir,
+                total_epochs=guided_total_epochs,
+                save_every_epoch=int(settings["save_every_epoch"]),
+                batch_size=int(settings["batch_size"]),
+                requested_num_workers=int(settings.get("worker_count", -1)),
+                recipe_mode=recipe_mode,
+                update_status=lambda stage, message, log_tail, progress: set_training_job_state(
+                    job_id,
+                    stage=stage,
+                    message=message,
+                    log_tail=log_tail,
+                    progress=map_guided_training_progress(progress),
+                ),
+                cancel_event=cancel_event,
+                resume_checkpoint_path=resume_checkpoint_path,
+                resume_report_path=resume_report_path,
+                start_phase=start_phase,
+                warmup_stage_epochs=warmup_stage_epochs,
+                bridge_stage_epochs=bridge_stage_epochs,
+                full_diversity_stage_epochs=full_diversity_stage_epochs,
+                general_refine_stage_epochs=general_refine_stage_epochs,
+            )
+
+            guided_dataset_features_dir = Path(str(prep_metadata["guided_svs_dataset_dir"])) / "features"
+            if guided_dataset_features_dir.exists():
+                shutil.rmtree(guided_dataset_features_dir, ignore_errors=True)
+
+            skip_backbone = output_mode == "pipa-logic-only" or cancel_event.is_set()
+            if skip_backbone:
+                set_training_job_state(
+                    job_id,
+                    stage="logic-only",
+                    message=(
+                        "Skipping all legacy backbone stages and packaging the Persona v1.0 voice-builder assets."
+                        if output_mode == "pipa-logic-only"
+                        else "Stop requested before any legacy backbone stage. Packaging the Persona v1.0 voice-builder assets now."
+                    ),
+                    progress=94,
+                    log_tail=(
+                        f"Best epoch {int(guided_metadata.get('best_epoch', 0))} | "
+                        f"best total {float(guided_metadata.get('best_val_total', 0.0)):.4f} | "
+                        f"lyric phone acc {float(guided_metadata.get('best_lyric_phone_accuracy', 0.0)) * 100.0:.1f}% | "
+                        f"plateau {int(guided_metadata.get('plateau_epochs', 0))} epochs | "
+                        "No legacy .pth or index assets will be created for this package."
+                    ),
+                )
+                metadata = {
+                    "experiment_name": experiment_name,
+                    "model_path": "",
+                    "index_path": "",
+                    "index_built": "0",
+                    "index_summary": "",
+                    "train_log_path": "",
+                    "stopped_early": "1" if cancel_event.is_set() or bool(guided_metadata.get("stopped_early", False)) else "0",
+                }
+            else:
+                metadata = trainer.run_training(
+                    experiment_name=experiment_name,
+                    dataset_dir=dataset_dir,
+                    sample_rate=str(settings["sample_rate"]),
+                    version=str(settings["version"]),
+                    f0_method=str(settings["f0_method"]),
+                    total_epochs=int(settings["total_epochs"]),
+                    save_every_epoch=int(settings["save_every_epoch"]),
+                    batch_size=int(settings["batch_size"]),
+                    crepe_hop_length=int(settings["crepe_hop_length"]),
+                    build_index=bool(settings["build_index"]),
+                    update_status=lambda stage, message, log_tail, progress: set_training_job_state(
+                        job_id,
+                        stage=stage,
+                        message=message,
+                        log_tail=log_tail,
+                        progress=progress,
+                    ),
+                    cancel_event=cancel_event,
+                )
+        guided_dataset_features_dir = Path(str(prep_metadata.get("guided_svs_dataset_dir", "") or "")) / "features"
+        if guided_dataset_features_dir.exists():
+            shutil.rmtree(guided_dataset_features_dir, ignore_errors=True)
+
+        aligned_backbone_dataset_dir = Path(str(prep_metadata.get("aligned_backbone_dataset_dir", "") or ""))
+        if aligned_backbone_dataset_dir.exists():
+            shutil.rmtree(aligned_backbone_dataset_dir, ignore_errors=True)
+        classic_rvc_dataset_dir = Path(str(prep_metadata.get("classic_rvc_dataset_dir", "") or ""))
+        if classic_rvc_dataset_dir.exists():
+            shutil.rmtree(classic_rvc_dataset_dir, ignore_errors=True)
+
         set_training_job_state(
             job_id,
             stage="package",
-            message="Packaging the Persona v1.0 bundle and writing the final profile files...",
+            message=f"Packaging the {_persona_output_label(recipe_mode)} bundle and writing the final profile files...",
             progress=96 if output_mode == "pipa-logic-only" else 98,
         )
         package_metadata = backend.pipa_store.finalize_training_package(
@@ -3110,34 +3625,101 @@ def start_training_job(
             guided_metadata.get("stopped_early", False)
         )
         guided_hardware_summary = str(guided_metadata.get("hardware_summary", "")).strip()
+        aligned_index_summary = str(metadata.get("index_summary", "") or "").strip()
+        checkpoint_preview_url = (
+            audio_output_url(Path(checkpoint_preview_controller.latest_output_path))
+            if checkpoint_preview_controller is not None and checkpoint_preview_controller.latest_output_path
+            else ""
+        )
+        checkpoint_preview_download_name = (
+            Path(checkpoint_preview_controller.latest_output_path).name
+            if checkpoint_preview_controller is not None and checkpoint_preview_controller.latest_output_path
+            else ""
+        )
+        checkpoint_preview_epoch = (
+            int(checkpoint_preview_controller.latest_epoch)
+            if checkpoint_preview_controller is not None
+            else 0
+        )
+        checkpoint_preview_status = (
+            f"Latest checkpoint audition is ready from epoch {checkpoint_preview_epoch}."
+            if checkpoint_preview_epoch > 0
+            else str(prep_metadata.get("preview_source_name", "") or "")
+        )
+        if classic_support_mode:
+            completion_message = (
+                f"Stopped cleanly. The latest saved classic RVC checkpoint was packaged into a usable {_persona_output_label(recipe_mode)} bundle."
+                if stopped_early
+                else "Training finished. Your package now includes the base-first classic RVC model, index, and SUNO audition metadata."
+            )
+            completion_tail = (
+                f"weights {Path(str(metadata.get('model_path', '') or '')).name or 'missing'} | "
+                f"index {'ready' if str(metadata.get('index_path', '') or '').strip() else 'missing'} | "
+                f"base {int(prep_metadata.get('base_voice_clip_count', 0))} | "
+                f"extra truth {int(prep_metadata.get('paired_song_count', 0))} | "
+                f"suno audition {int(prep_metadata.get('depersonafied_variant_count', 0))}"
+            )
+            if checkpoint_preview_epoch > 0:
+                completion_tail = f"{completion_tail} | latest audition epoch {checkpoint_preview_epoch}"
+        elif direct_pair_mode:
+            completion_message = (
+                f"Stopped cleanly. The latest saved direct paired converter checkpoint was packaged into a usable {_persona_output_label(recipe_mode)} bundle."
+                if stopped_early
+                else (
+                    "Training finished. Your package now includes the concert remaster checkpoint and conversion metadata."
+                    if recipe_mode == "concert-remaster-paired"
+                    else "Training finished. Your package now includes the direct paired converter checkpoint and conversion metadata."
+                )
+            )
+            completion_tail = (
+                f"Best epoch {int(guided_metadata.get('best_epoch', 0))} | "
+                f"best total {float(guided_metadata.get('best_val_total', 0.0)):.4f} | "
+                f"best quality {float(guided_metadata.get('best_target_quality', 0.0)):.4f} | "
+                f"voicing {float(guided_metadata.get('best_vuv_accuracy', 0.0)) * 100.0:.1f}% | "
+                f"plateau {int(guided_metadata.get('plateau_epochs', 0))} epochs | "
+                f"slices {int(guided_metadata.get('sample_count', 0))} | "
+                + (
+                    f"concert {int(prep_metadata.get('base_voice_clip_count', 0))} | "
+                    f"pairs {int(prep_metadata.get('paired_song_count', 0))}"
+                    if recipe_mode == "concert-remaster-paired"
+                    else f"base {int(prep_metadata.get('base_voice_clip_count', 0))} | pairs {int(prep_metadata.get('paired_song_count', 0))}"
+                )
+            )
+        else:
+            completion_message = (
+                f"{_persona_output_label(recipe_mode)} build finished. The guide-conditioned package is ready."
+                if output_mode == "pipa-logic-only"
+                else (
+                    f"Stopped cleanly. The latest saved assets were packaged into a usable {_persona_output_label(recipe_mode)} bundle."
+                    if stopped_early
+                    else (
+                        f"Training finished. Your package now includes the {_persona_output_label(recipe_mode)} regenerator, neural waveform decoder, and legacy backbone assets."
+                        if bool(settings["build_index"])
+                        else f"Training finished. Your package now includes the {_persona_output_label(recipe_mode)} regenerator and neural waveform decoder without an index."
+                    )
+                )
+            )
+            completion_tail = (
+                f"Best epoch {int(guided_metadata.get('best_epoch', 0))} | "
+                f"best total {float(guided_metadata.get('best_val_total', 0.0)):.4f} | "
+                f"best quality {float(guided_metadata.get('best_target_quality', 0.0)):.4f} | "
+                f"lyric phone acc {float(guided_metadata.get('best_lyric_phone_accuracy', 0.0)) * 100.0:.1f}% | "
+                f"voicing {float(guided_metadata.get('best_vuv_accuracy', 0.0)) * 100.0:.1f}% | "
+                f"plateau {int(guided_metadata.get('plateau_epochs', 0))} epochs | "
+                f"render {str(guided_metadata.get('render_mode', 'griffinlim_preview_only'))}"
+                f"{late_phase_summary}"
+                f"{f' | {guided_hardware_summary}' if guided_hardware_summary else ''}"
+            )
+        if aligned_index_summary and not classic_support_mode:
+            completion_tail = f"{completion_tail} | {aligned_index_summary}"
 
         set_training_job_state(
             job_id,
             status="completed",
             stage="done",
-            message=(
-                "Persona v1.0 build finished. The guide-conditioned voice-builder package is ready."
-                if output_mode == "pipa-logic-only"
-                else (
-                    "Stopped cleanly. The latest saved assets were packaged into a usable Persona v1.0 bundle."
-                    if stopped_early
-                    else (
-                        "Training finished. Your package now includes the guide-conditioned voice-builder regenerator, neural waveform decoder, and legacy backbone assets."
-                        if bool(settings["build_index"])
-                        else "Training finished. Your package now includes the guide-conditioned voice-builder regenerator and neural waveform decoder without an index."
-                    )
-                )
-            ),
+            message=completion_message,
             progress=100,
-            log_tail=(
-                f"Best epoch {int(guided_metadata.get('best_epoch', 0))} | "
-                f"best total {float(guided_metadata.get('best_val_total', 0.0)):.4f} | "
-                f"lyric phone acc {float(guided_metadata.get('best_lyric_phone_accuracy', 0.0)) * 100.0:.1f}% | "
-                f"voicing {float(guided_metadata.get('best_vuv_accuracy', 0.0)) * 100.0:.1f}% | "
-                f"plateau {int(guided_metadata.get('plateau_epochs', 0))} epochs | "
-                f"render {str(guided_metadata.get('render_mode', 'griffinlim_preview_only'))}"
-                f"{f' | {guided_hardware_summary}' if guided_hardware_summary else ''}"
-            ),
+            log_tail=completion_tail,
             stop_requested=cancel_event.is_set(),
             stopped_early=stopped_early,
             model_path=str(metadata["model_path"]),
@@ -3156,6 +3738,7 @@ def start_training_job(
             guided_regeneration_target_preview_path=str(package_metadata.get("guided_regeneration_target_preview_path", "")),
             guided_regeneration_best_val_l1=float(guided_metadata.get("best_val_l1", 0.0)),
             guided_regeneration_best_val_total=float(guided_metadata.get("best_val_total", 0.0)),
+            guided_regeneration_best_target_quality=float(guided_metadata.get("best_target_quality", 0.0)),
             guided_regeneration_best_epoch=int(guided_metadata.get("best_epoch", 0)),
             guided_regeneration_best_phone_accuracy=float(guided_metadata.get("best_phone_accuracy", 0.0)),
             guided_regeneration_best_lyric_phone_accuracy=float(guided_metadata.get("best_lyric_phone_accuracy", 0.0)),
@@ -3177,6 +3760,12 @@ def start_training_job(
             base_voice_clip_count=int(prep_metadata.get("base_voice_clip_count", 0)),
             paired_song_count=int(prep_metadata.get("paired_song_count", 0)),
             depersonafied_variant_count=int(prep_metadata.get("depersonafied_variant_count", 0)),
+            checkpoint_preview_url=checkpoint_preview_url,
+            checkpoint_preview_download_name=checkpoint_preview_download_name,
+            checkpoint_preview_epoch=checkpoint_preview_epoch,
+            checkpoint_preview_source_name=str(prep_metadata.get("preview_source_name", "") or ""),
+            checkpoint_preview_source_role=str(prep_metadata.get("preview_source_role", "") or ""),
+            checkpoint_preview_status=checkpoint_preview_status,
         )
     except InterruptedError as exc:
         set_training_job_state(
@@ -3990,7 +4579,14 @@ def start_touchup_job(
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_ROOT / "index.html")
+    return FileResponse(
+        STATIC_ROOT / "index.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/api/health")
@@ -4582,7 +5178,7 @@ def stop_training_job(job_id: str) -> Dict[str, object]:
             if job.stage in {"pipa-svs-data", "persona-base", "persona-paired", "persona-dataset"}
             else (
                 "Stop requested. Finishing the current alignment chunk..."
-                if job.output_mode in {"pipa-logic-only", "persona-v1"}
+                if job.output_mode in PERSONA_LOGIC_OUTPUT_MODES
                 else "Stop requested. Finishing the current training checkpoint..."
             )
         ),
@@ -4706,7 +5302,7 @@ async def create_rebuild_plan(
 @app.post("/api/master-conversion/jobs")
 async def create_master_conversion_job(
     model_name: str = Form(...),
-    lyrics: str = Form(...),
+    lyrics: str = Form(""),
     quality_preset: str = Form("balanced"),
     output_format: str = Form("wav"),
     source_file: UploadFile = File(...),
@@ -4716,7 +5312,7 @@ async def create_master_conversion_job(
     if not available_models:
         raise HTTPException(
             status_code=400,
-            detail="No Persona v1.0 voices were found. Train or add a persona package first.",
+            detail="No Persona voices were found. Train or add a Persona package first.",
         )
     if model_name not in available_models:
         raise HTTPException(status_code=400, detail="Selected persona voice does not exist.")
@@ -4727,12 +5323,31 @@ async def create_master_conversion_job(
     if not str(primary_model_bundle.get("guided_regeneration_path", "") or "").strip():
         raise HTTPException(
             status_code=400,
-            detail="Selected voice is missing its Persona v1.0 builder checkpoint.",
+            detail="Selected voice is missing its Persona builder checkpoint.",
         )
     if source_file is None or not source_file.filename:
         raise HTTPException(status_code=400, detail="Please upload one lead vocal file.")
     clean_lyrics = str(lyrics or "").strip()
-    if not clean_lyrics:
+    selected_package_mode = str(
+        (selected_pipa_bundle or {}).get("package_mode", "persona-v1") or "persona-v1"
+    ).strip() or "persona-v1"
+    selected_guided_config_path = Path(
+        str((selected_pipa_bundle or {}).get("guided_regeneration_config_path", "") or "").strip()
+    )
+    selected_training_mode = ""
+    if selected_guided_config_path.exists() and selected_guided_config_path.is_file():
+        try:
+            selected_guided_config = json.loads(selected_guided_config_path.read_text(encoding="utf-8"))
+            if isinstance(selected_guided_config, dict):
+                selected_training_mode = str(selected_guided_config.get("training_mode", "") or "").strip().lower()
+        except Exception:
+            selected_training_mode = ""
+    direct_v11_mode = (
+        selected_package_mode == "persona-v1.1"
+        and selected_training_mode == "persona-paired-mapper-v1.1"
+    )
+    lyrics_required = not (direct_v11_mode or selected_package_mode == "persona-aligned-pth")
+    if lyrics_required and not clean_lyrics:
         raise HTTPException(status_code=400, detail="Paste the intended lyrics first.")
 
     output_format = output_format.lower()
@@ -4767,7 +5382,7 @@ async def create_master_conversion_job(
     settings["lyrics"] = clean_lyrics
     settings["quality_preset"] = quality_preset
     settings["master_profile"] = "studio"
-    settings["output_mode"] = "persona-v1"
+    settings["output_mode"] = selected_package_mode
     settings["secondary_model_name"] = ""
     settings["blend_percentage"] = 100
     settings["preprocess_mode"] = "off"
@@ -4800,7 +5415,7 @@ async def create_master_conversion_job(
         quality_preset=quality_preset,
         master_profile="studio",
         preferred_pipeline=str(settings.get("preprocess_mode", "")),
-        output_mode="persona-v1",
+        output_mode=selected_package_mode,
         secondary_model_name="",
         blend_percentage=100,
     )
@@ -4828,13 +5443,13 @@ async def create_generate_job(
     preprocess_mode: str = Form("off"),
     preprocess_strength: int = Form(9),
     guide_file: UploadFile = File(...),
-) -> Dict[str, object]:
+    ) -> Dict[str, object]:
     _assert_persona_runtime_available("Persona generation")
     available_models = get_available_model_names()
     if not available_models:
         raise HTTPException(
             status_code=400,
-            detail="No Persona v1.0 voices were found. Train or add a persona package first.",
+            detail="No conversion voices were found. Train or add a voice first.",
         )
     if model_name not in available_models:
         raise HTTPException(status_code=400, detail="Selected voice model does not exist.")
@@ -4953,7 +5568,7 @@ async def create_job(
     if not available_models:
         raise HTTPException(
             status_code=400,
-            detail="No Persona v1.0 voices were found. Train or add a persona package first.",
+            detail="No conversion voices were found. Train or add a voice first.",
         )
     if model_name not in available_models:
         raise HTTPException(status_code=400, detail="Selected model does not exist.")
@@ -5074,7 +5689,7 @@ async def generate_preview(
     if not available_models:
         raise HTTPException(
             status_code=400,
-            detail="No Persona v1.0 voices were found. Train or add a persona package first.",
+            detail="No conversion voices were found. Train or add a voice first.",
         )
     if model_name not in available_models:
         raise HTTPException(status_code=400, detail="Selected model does not exist.")
@@ -5597,16 +6212,20 @@ async def create_training_job(
     sample_rate: str = Form("40k"),
     version: str = Form("v2"),
     f0_method: str = Form("rmvpe"),
-    output_mode: str = Form("persona-v1"),
+    output_mode: str = Form("classic-rvc-support"),
     epoch_mode: str = Form("manual-stop"),
     alignment_tolerance: str = Form("forgiving"),
     total_epochs: int = Form(1200),
     warmup_stage_epochs: int = Form(200),
     bridge_stage_epochs: int = Form(500),
     full_diversity_stage_epochs: int = Form(500),
+    general_refine_stage_epochs: int = Form(180),
+    target_fit_stage_epochs: int = Form(0),
+    post_process_stage_epochs: int = Form(0),
     save_every_epoch: int = Form(25),
     batch_size: int = Form(4),
     crepe_hop_length: int = Form(128),
+    worker_count: int = Form(-1),
     resume_selection_name: str = Form(""),
     start_phase: str = Form("auto"),
     files: List[UploadFile] = File(...),
@@ -5616,14 +6235,27 @@ async def create_training_job(
     _assert_persona_runtime_available("Persona training")
     transcript_files = list(transcript_files or [])
     plan_files = list(plan_files or [])
+    output_mode = _resolve_training_output_mode_fallback(
+        output_mode,
+        version=version,
+        transcript_files=transcript_files,
+        plan_files=plan_files,
+    )
     if not files:
         raise HTTPException(
             status_code=400, detail="Please upload at least one audio file to train on."
         )
-    if not transcript_files and not plan_files:
+    normalized_output_mode = str(output_mode or "").strip().lower()
+    direct_pair_mode = normalized_output_mode in {
+        "persona-aligned-pth",
+        "concert-remaster-paired",
+    }
+    classic_support_mode = normalized_output_mode == "classic-rvc-support"
+    transcript_free_mode = normalized_output_mode in DIRECT_DATASET_OUTPUT_MODES
+    if (not transcript_files and not plan_files) and not transcript_free_mode:
         raise HTTPException(
             status_code=400,
-            detail="Please upload either transcripts or a persona training plan manifest to build a Persona v1.0 model.",
+            detail="Please upload either transcripts or a persona training plan manifest to build a Persona package.",
         )
     options = trainer.get_options()
     if sample_rate not in set(options["sample_rates"]):
@@ -5632,36 +6264,77 @@ async def create_training_job(
         raise HTTPException(status_code=400, detail="Unsupported model version.")
     if f0_method not in set(options["f0_methods"]):
         raise HTTPException(status_code=400, detail="Unsupported pitch extraction method.")
-    if output_mode not in {"persona-v1", "pipa-full", "pipa-lite", "pipa-logic-only"}:
-        raise HTTPException(status_code=400, detail="Unsupported training system.")
+    if direct_pair_mode:
+        epoch_mode = "fixed"
+        alignment_tolerance = "forgiving"
+        resume_selection_name = ""
+        start_phase = "auto"
+    if classic_support_mode:
+        epoch_mode = "fixed"
+        alignment_tolerance = "forgiving"
+        resume_selection_name = ""
+        start_phase = "auto"
     if epoch_mode not in {"fixed", "manual-stop"}:
         raise HTTPException(status_code=400, detail="Unsupported training length mode.")
     if alignment_tolerance not in {"forgiving", "balanced", "strict"}:
         raise HTTPException(status_code=400, detail="Unsupported transcript alignment tolerance.")
     start_phase = _normalize_training_start_phase(start_phase)
-    if start_phase not in {"auto", "warm-up", "curriculum-bridge", "full-diversity"}:
+    if start_phase not in {"auto", "warm-up", "curriculum-bridge", "full-diversity", "general-refine"}:
         raise HTTPException(status_code=400, detail="Unsupported training start phase.")
 
-    warmup_stage_epochs = max(0, min(int(warmup_stage_epochs), 10000))
-    bridge_stage_epochs = max(0, min(int(bridge_stage_epochs), 10000))
-    full_diversity_stage_epochs = max(0, min(int(full_diversity_stage_epochs), 10000))
-    requested_total_epochs = warmup_stage_epochs + bridge_stage_epochs + full_diversity_stage_epochs
-    if requested_total_epochs < 1:
-        raise HTTPException(status_code=400, detail="Set at least one curriculum stage to run for one epoch or more.")
-    total_epochs = requested_total_epochs
-    guided_regeneration_epochs = requested_total_epochs
-    persona_only_mode = output_mode in {"persona-v1", "pipa-logic-only"}
-    if epoch_mode == "manual-stop":
-        if persona_only_mode:
-            guided_regeneration_epochs = max(requested_total_epochs, 20000)
-        else:
-            # Full/lite mode still needs to reach the RVC backbone, so keep the
-            # regeneration pass substantial without trapping the run there forever.
-            guided_regeneration_epochs = max(requested_total_epochs, 600)
-            total_epochs = max(requested_total_epochs, 20000)
+    total_epochs = max(1, min(int(total_epochs), 30000))
+    if direct_pair_mode:
+        warmup_stage_epochs = 0
+        bridge_stage_epochs = 0
+        full_diversity_stage_epochs = 0
+        general_refine_stage_epochs = total_epochs
+        requested_total_epochs = total_epochs
+        guided_regeneration_epochs = total_epochs
+    elif classic_support_mode:
+        warmup_stage_epochs = 0
+        bridge_stage_epochs = 0
+        full_diversity_stage_epochs = 0
+        general_refine_stage_epochs = 0
+        requested_total_epochs = total_epochs
+        guided_regeneration_epochs = 0
+    else:
+        warmup_stage_epochs = max(0, min(int(warmup_stage_epochs), 10000))
+        bridge_stage_epochs = max(0, min(int(bridge_stage_epochs), 10000))
+        full_diversity_stage_epochs = max(0, min(int(full_diversity_stage_epochs), 10000))
+        general_refine_stage_epochs = max(0, min(int(general_refine_stage_epochs), 10000))
+        target_fit_stage_epochs = max(0, min(int(target_fit_stage_epochs), 10000))
+        post_process_stage_epochs = max(0, min(int(post_process_stage_epochs), 10000))
+        general_refine_stage_epochs = min(
+            10000,
+            general_refine_stage_epochs + target_fit_stage_epochs + post_process_stage_epochs,
+        )
+        requested_total_epochs = (
+            warmup_stage_epochs
+            + bridge_stage_epochs
+            + full_diversity_stage_epochs
+            + general_refine_stage_epochs
+        )
+        if requested_total_epochs < 1:
+            raise HTTPException(status_code=400, detail="Set at least one curriculum stage to run for one epoch or more.")
+        if start_phase == "general-refine" and general_refine_stage_epochs < 1:
+            raise HTTPException(status_code=400, detail="Set General refine to at least one epoch before starting from that phase.")
+        if start_phase == "general-refine" and not str(resume_selection_name or "").strip():
+            raise HTTPException(status_code=400, detail="General refine needs a saved Persona package to resume from.")
+        total_epochs = requested_total_epochs
+        guided_regeneration_epochs = requested_total_epochs
+        persona_only_mode = output_mode in PERSONA_LOGIC_OUTPUT_MODES
+        if epoch_mode == "manual-stop":
+            if persona_only_mode:
+                guided_regeneration_epochs = max(requested_total_epochs, 20000)
+            else:
+                # Full/lite mode still needs to reach the RVC backbone, so keep the
+                # regeneration pass substantial without trapping the run there forever.
+                guided_regeneration_epochs = max(requested_total_epochs, 600)
+                total_epochs = max(requested_total_epochs, 20000)
     save_every_epoch = max(1, min(int(save_every_epoch), total_epochs))
     batch_size = max(1, min(int(batch_size), 128))
     crepe_hop_length = max(1, min(int(crepe_hop_length), 512))
+    worker_count = max(-1, min(int(worker_count), 64))
     chosen_name = trainer.make_unique_experiment_name(experiment_name)
 
     job_id = uuid4().hex[:10]
@@ -5691,7 +6364,7 @@ async def create_training_job(
         with target.open("wb") as handle:
             handle.write(await upload.read())
 
-    build_index = output_mode == "pipa-full"
+    build_index = output_mode in {"pipa-full", "classic-rvc-support"}
     job = TrainingJobState(
         id=job_id,
         experiment_name=chosen_name,
@@ -5717,9 +6390,11 @@ async def create_training_job(
         "warmup_stage_epochs": warmup_stage_epochs,
         "bridge_stage_epochs": bridge_stage_epochs,
         "full_diversity_stage_epochs": full_diversity_stage_epochs,
+        "general_refine_stage_epochs": general_refine_stage_epochs,
         "save_every_epoch": save_every_epoch,
         "batch_size": batch_size,
         "crepe_hop_length": crepe_hop_length,
+        "worker_count": worker_count,
         "build_index": bool(build_index),
         "alignment_tolerance": alignment_tolerance,
         "resume_selection_name": str(resume_selection_name or "").strip(),

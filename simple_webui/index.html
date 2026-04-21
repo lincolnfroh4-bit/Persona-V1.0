@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Mangio Studio</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260415a">
+  <link rel="stylesheet" href="/static/styles.css?v=20260419b">
 </head>
 <body>
   <div class="app-layout">
@@ -24,7 +24,7 @@
       </nav>
       <div class="sidebar-meta">
         <p class="sidebar-eyebrow">Current workflow</p>
-        <p>De-personafied guide in, target lead out. Train with base vocals plus paired songs, then deploy the builder for final rebuilds.</p>
+        <p>Aligned SUNO vocal in, target voice out. Train with `BASE`, `TARGET`, and `SUNO` clips, then run direct full-vocal conversion with no lyric repair layer.</p>
       </div>
     </aside>
 
@@ -32,21 +32,21 @@
       <header class="shell-header">
         <div class="shell-header-copy">
           <p class="section-kicker">Mangio Voice Platform</p>
-          <h1>Production-grade target voice rebuilding</h1>
-          <p>Cleaner training inputs, clearer delivery steps, and a studio-facing layout built around the persona-builder workflow you are actually using now.</p>
+          <h1>Direct voice conversion</h1>
+          <p>The app is now centered on one straightforward path: train aligned target packages for exact conversion, or use a classic RVC `.pth` voice directly, then run conversion without lyric scoring, repair passes, or regeneration layers.</p>
         </div>
         <div class="shell-header-rail">
           <div class="shell-badge">
             <span>Input</span>
-            <strong>Guide vocal + lyrics</strong>
+            <strong>SUNO vocal only</strong>
           </div>
           <div class="shell-badge">
             <span>Training</span>
-            <strong>Base voice + paired songs</strong>
+            <strong>BASE + TARGET + SUNO</strong>
           </div>
           <div class="shell-badge">
             <span>Output</span>
-            <strong>Final target lead</strong>
+            <strong>Direct target vocal</strong>
           </div>
         </div>
       </header>
@@ -55,24 +55,24 @@
         <div class="page-hero">
           <div class="page-hero-copy">
             <p class="section-kicker">Lead Builder</p>
-            <h2 class="page-title">Rebuild one isolated guide vocal into the final target lead</h2>
-            <p class="page-copy">This page is now tuned for the real job: pick the persona voice, attach one clean lead vocal, paste the exact lyrics, and render the finished target lead through Persona v1.0.</p>
+            <h2 class="page-title">Convert one isolated SUNO vocal straight into the target voice</h2>
+             <p class="page-copy">Lead Builder now supports both paired aligned packages and classic RVC `.pth` voices. Pick a conversion model, attach one isolated vocal, and run direct conversion with no lyric entry, repair pass, or rebuild stage.</p>
           </div>
           <div class="hero-metrics">
             <div class="hero-metric">
               <span>01</span>
-              <strong>Persona voice</strong>
-              <p>Select the trained Persona v1.0 voice package.</p>
+                <strong>Conversion voice</strong>
+                <p>Select a paired aligned package or a classic RVC `.pth` voice.</p>
             </div>
             <div class="hero-metric">
               <span>02</span>
-              <strong>Lead vocal</strong>
-              <p>Attach one isolated lead or de-personafied vocal take.</p>
+              <strong>SUNO input</strong>
+              <p>Attach one isolated full vocal with no full mix or backing stack.</p>
             </div>
             <div class="hero-metric">
               <span>03</span>
-              <strong>Final render</strong>
-              <p>Render the final target lead with the new persona system only.</p>
+              <strong>Direct render</strong>
+              <p>Render the converted target vocal directly from the trained `.pth` model.</p>
             </div>
           </div>
         </div>
@@ -94,7 +94,7 @@
                 <select id="modelSelect">
                   <option value="">Loading models...</option>
                 </select>
-                <small id="pipaPackageSummary">Persona v1.0 package used for the final lead rebuild.</small>
+                <small id="pipaPackageSummary">Paired aligned and classic RVC `.pth` voices appear here. Lyrics are not used in this mode.</small>
               </label>
 
               <label class="field">
@@ -104,22 +104,22 @@
                   <option value="fast">Fast</option>
                   <option value="clean">High quality</option>
                 </select>
-                <small id="qualitySummary">Balanced is the safest default for most lead rebuilds.</small>
+                <small id="qualitySummary">Balanced is the safest default for most direct paired conversions.</small>
               </label>
             </div>
 
             <div class="section-head compact">
               <div>
                 <p class="section-kicker">Step 2</p>
-                <h3>Add the guide vocal and lyrics</h3>
+                <h3>Add the SUNO vocal</h3>
               </div>
             </div>
 
             <label id="dropZone" class="drop-zone" for="fileInput">
               <input id="fileInput" type="file" accept="audio/*" hidden>
               <div>
-                <strong>Attach lead vocal audio</strong>
-                <p>Use one isolated lead or de-personafied guide vocal. No backing stacks, no full mix.</p>
+                <strong>Attach one isolated SUNO vocal</strong>
+                <p>Use the cleaned vocal you want to convert. No lyrics needed. No backing stacks, no full mix, and no repair metadata.</p>
               </div>
             </label>
 
@@ -127,31 +127,26 @@
               <p>No song selected yet.</p>
             </div>
 
-            <label class="field">
-              <span>Attach lead vocal lyrics</span>
-              <textarea id="masterLyrics" rows="7" placeholder="Paste the exact lyrics in order. Persona v1.0 uses them to align the vocal, score weak regions, and rebuild the final target lead."></textarea>
-            </label>
-
             <div class="callout workflow-note">
-              <strong>Persona v1.0 conversion</strong>
-              <p>The guide provides content and timing. The selected persona package rebuilds the final target lead from the voice it learned during training.</p>
+              <strong>Direct conversion</strong>
+              <p>This mode only runs the trained conversion model. There is no lyric alignment, no post repair, and no regeneration layer after inference.</p>
             </div>
 
             <div class="action-row">
-              <button id="startButton" class="primary-button" type="button">Run Master Conversion</button>
+              <button id="startButton" class="primary-button" type="button">Run Direct Conversion</button>
             </div>
           </section>
 
           <aside class="panel panel-side">
             <div class="callout side-callout">
               <strong>Delivery target</strong>
-              <p>One final target lead. The status panel below tracks the rebuild, and finished files appear in the result list ready for download.</p>
+              <p>One direct converted target vocal. The status panel below tracks the render, and finished files appear in the result list ready for auditioning.</p>
             </div>
 
             <div id="previewStatusCard" class="status-card idle hidden">
               <p class="status-label">Preview</p>
               <strong id="previewStatusTitle">Preview disabled</strong>
-              <p id="previewStatusMessage">Legacy preview is disabled while Master Conversion uses the full-song pipeline.</p>
+              <p id="previewStatusMessage">Legacy preview is disabled while Lead Builder uses the full direct-conversion path.</p>
               <div class="progress-shell">
                 <div id="previewProgressBar" class="progress-bar"></div>
               </div>
@@ -163,7 +158,7 @@
             <div id="statusCard" class="status-card idle">
               <p class="status-label">Status</p>
               <strong id="statusTitle">Waiting for a song</strong>
-              <p id="statusMessage">Choose the voice, add one full song, paste the lyrics, and run Master Conversion.</p>
+              <p id="statusMessage">Choose the voice, add one isolated SUNO vocal, and run direct conversion.</p>
               <div class="progress-shell">
                 <div id="progressBar" class="progress-bar"></div>
               </div>
@@ -174,6 +169,7 @@
           </aside>
         </div>
         <div class="hidden" aria-hidden="true">
+          <textarea id="masterLyrics" rows="2"></textarea>
           <select id="pipaPackageSelect">
             <option value="">Bundled persona package</option>
           </select>
@@ -224,7 +220,7 @@
           <select id="preprocessMode">
             <option value="off">Off</option>
           </select>
-          <small id="preprocessModeSummary">Disabled for Master Conversion.</small>
+          <small id="preprocessModeSummary">Disabled for Lead Builder.</small>
           <input id="preprocessStrength" type="range" min="1" max="20" value="1" disabled>
           <small><span id="preprocessStrengthValue">1</span></small>
         </div>
@@ -795,24 +791,24 @@
         <div class="page-hero">
           <div class="page-hero-copy">
             <p class="section-kicker">Voice Builder</p>
-            <h2 class="page-title">Train the paired-song regenerator behind the target voice</h2>
-            <p class="page-copy">This training view is now organized around the persona-builder recipe: base target vocals for identity, paired songs for guide-to-target behavior, and a clearer manifest-driven upload flow.</p>
+            <h2 class="page-title">Train a base-first conversion voice</h2>
+            <p class="page-copy">Use the stable classic RVC route when you want BASE clips to stay dominant and hear real checkpoint auditions on a fixed SUNO chunk, or switch to the stricter paired modes when you truly have aligned TARGET/SUNO supervision. No lyrics. No persona plan. No repair layer.</p>
           </div>
           <div class="hero-metrics">
             <div class="hero-metric">
               <span>Base</span>
-              <strong>30-60 min target vocals</strong>
-              <p>Pure voice clips that teach timbre and general delivery.</p>
+              <strong>`BASE*` target vocals</strong>
+              <p>The cleanest target clips still anchor the real speaker identity.</p>
             </div>
             <div class="hero-metric">
-              <span>Pairs</span>
-              <strong>5 matched songs</strong>
-              <p>De-personafied guides aligned against the ground-truth target.</p>
+              <span>Audition</span>
+              <strong>Fixed 10 second SUNO chunk</strong>
+              <p>Each saved checkpoint now renders the same short audition clip so you can hear whether the voice is actually improving.</p>
             </div>
             <div class="hero-metric">
               <span>Goal</span>
-              <strong>New guide in, target lead out</strong>
-              <p>Train for rebuild accuracy, not dataset cleanup.</p>
+              <strong>Usable target voice</strong>
+              <p>The safe mode keeps BASE as truth instead of letting random source-domain audio dilute the voice.</p>
             </div>
           </div>
         </div>
@@ -821,23 +817,23 @@
             <div id="trainingWarning" class="callout hidden"></div>
 
             <div class="callout recipe-callout">
-              <strong>Persona-builder training</strong>
-              <p>This flow now supports two data layers: pure target vocals to generally learn the voice, plus paired songs where de-personafied guide vocals map into the real target performance. The package now focuses on the direct regenerator and pronunciation/rebuild assets used by Persona v1.0.</p>
+              <strong>Stable training recipes</strong>
+              <p>Classic RVC + SUNO audition keeps `BASE` as the true target-voice data and uses `SUNO` only for repeated checkpoint listening. The paired modes still exist when you have tightly aligned truth pairs and want direct source-to-target supervision.</p>
               <div class="recipe-grid">
                 <div class="recipe-card">
                   <span>Layer 1</span>
                   <strong>Base identity library</strong>
-                  <p>30 to 60 minutes of clean target vocals with no guide pairing required.</p>
+                  <p>Use the cleanest target clips here. Name them with `BASE`.</p>
                 </div>
                 <div class="recipe-card">
                   <span>Layer 2</span>
-                  <strong>Paired supervision songs</strong>
-                  <p>Target songs plus matching de-personafied guides at the same lyrics and pacing.</p>
+                  <strong>Checkpoint audition source</strong>
+                  <p>Name source clips `SUNO_*` if you want the fixed preview chunk to come from that domain.</p>
                 </div>
                 <div class="recipe-card">
                   <span>Outcome</span>
-                  <strong>Accurate rebuild model</strong>
-                  <p>Use new external guides later and regenerate them into the target artist.</p>
+                  <strong>Conversion voice package</strong>
+                  <p>The finished bundle should appear in Lead Builder like a normal conversion voice.</p>
                 </div>
               </div>
             </div>
@@ -857,72 +853,9 @@
 
               <label class="field">
                 <span>Training system</span>
-                <select id="trainingVersion">
-                  <option value="v2">Persona v1.0</option>
-                </select>
-                <small>The legacy `.pth` backbone path is retired. This run trains the Persona v1.0 builder only.</small>
+                <input type="text" value="Classic RVC + SUNO audition" readonly>
+                <small>The default route now favors the stable base-first classic model path.</small>
               </label>
-
-              <label class="field">
-                <span>Output package</span>
-                <select id="trainingOutputMode">
-                  <option value="persona-v1">Persona v1.0</option>
-                </select>
-                <small>Builds the paired-song regenerator and pronunciation assets used by the new persona conversion flow.</small>
-              </label>
-            </div>
-
-            <div class="section-head compact">
-              <div>
-                <p class="section-kicker">Package Library</p>
-                <h3>Download an existing Persona package</h3>
-              </div>
-            </div>
-            <div class="field-grid">
-              <label class="field">
-                <span>Saved package</span>
-                <select id="trainingPackageDownloadSelect">
-                  <option value="">No Persona packages found yet</option>
-                </select>
-                <small>Downloads the full PIPA package folder as one zip.</small>
-              </label>
-              <div class="field field-actions">
-                <span>Package download</span>
-                <div class="action-row">
-                  <button id="downloadTrainingPackageButton" class="ghost-button" type="button">Download package</button>
-                </div>
-                <small id="trainingPackageDownloadSummary">Pick a Persona package to download its full folder.</small>
-              </div>
-            </div>
-
-            <div class="section-head compact">
-              <div>
-                <p class="section-kicker">Resume</p>
-                <h3>Continue a saved Persona package</h3>
-              </div>
-            </div>
-            <div class="field-grid">
-              <label class="field">
-                <span>Resume from package</span>
-                <select id="trainingResumePackageSelect">
-                  <option value="">Start fresh (no saved package)</option>
-                </select>
-                <small>Loads the latest saved guide-builder checkpoint from that Persona package before this run starts.</small>
-              </label>
-              <label class="field">
-                <span>Start training phase</span>
-                <select id="trainingStartPhase">
-                  <option value="auto">Auto (pick up based on saved epoch)</option>
-                  <option value="warm-up">Warm-up</option>
-                  <option value="curriculum-bridge">Curriculum bridge</option>
-                  <option value="full-diversity">Full diversity</option>
-                </select>
-                <small>Use bridge or full diversity to skip the long warm-up on a previously trained package.</small>
-              </label>
-            </div>
-            <div class="hint-card">
-              <strong id="trainingResumeSummary">Start fresh, or pick a Persona package to continue from its latest saved checkpoint.</strong>
-              <p>Resume still uses the audio and plan you upload below. It reloads the saved builder weights, keeps the model's absolute epoch count, and continues from the phase you choose.</p>
             </div>
 
             <div class="section-head compact">
@@ -936,7 +869,7 @@
               <input id="trainingFileInput" type="file" accept="audio/*" multiple hidden>
               <div>
                 <strong>Drop all training audio here</strong>
-                <p>Include base target vocals, paired target songs, and every de-personafied guide referenced by the persona plan.</p>
+                <p>Use `BASE*` for the real target voice. Add `SUNO*` if you want checkpoint auditions from that source domain. Paired modes still accept matching `TARGET*`/`SUNO*` or `CONCERT*`/`CD*` names.</p>
               </div>
             </label>
 
@@ -946,77 +879,41 @@
 
             <div class="upload-guide-grid">
               <div class="upload-guide-card">
-                <strong>Base voice clips</strong>
-                <p>Pure isolated target vocals that generally teach the voice.</p>
+                <strong>`BASE*` clips</strong>
+                <p>The true target-voice clips. These stay dominant in the stable classic route.</p>
               </div>
               <div class="upload-guide-card">
-                <strong>Ground-truth target songs</strong>
-                <p>The real target performances for the five paired songs.</p>
+                <strong>`TARGET*` clips</strong>
+                <p>Optional extra target-voice truth clips for the classic route, or aligned truth phrases for paired conversion.</p>
               </div>
               <div class="upload-guide-card">
-                <strong>De-personafied guides</strong>
-                <p>Matching songs with the same lyrics and pacing, but flatter tendencies.</p>
+                <strong>`SUNO*` clips</strong>
+                <p>Used as the fixed checkpoint audition source in classic mode, or as aligned sources in paired conversion.</p>
               </div>
             </div>
 
             <div class="section-head compact">
               <div>
                 <p class="section-kicker">Step 3</p>
-                <h3>Upload the persona plan</h3>
-              </div>
-            </div>
-
-            <label id="trainingPlanDropZone" class="drop-zone compact-drop" for="trainingPlanFileInput">
-              <input id="trainingPlanFileInput" type="file" accept=".json,application/json,text/plain" multiple hidden>
-              <div>
-                <strong>Drop a persona plan manifest here</strong>
-                <p>Preferred. The plan should map your base vocal clips plus each paired song: target vocal, lyrics, and de-personafied guide files.</p>
-              </div>
-            </label>
-
-            <div id="trainingPlanFileList" class="file-list empty-list">
-              <p>No persona plan uploaded yet.</p>
-            </div>
-
-            <div class="hint-card">
-              <strong>Manifest tip</strong>
-              <p>Use one JSON plan that lists `base_vocals` and `paired_songs`. The example template lives in `docs/persona_training_plan.example.json` inside the repo.</p>
-            </div>
-
-            <div class="section-head compact">
-              <div>
-                <p class="section-kicker">Step 4</p>
-                <h3>Optional separate transcripts</h3>
-              </div>
-            </div>
-
-            <label id="trainingTranscriptDropZone" class="drop-zone compact-drop" for="trainingTranscriptFileInput">
-              <input id="trainingTranscriptFileInput" type="file" accept=".txt,.json,.jsonl,.csv,.tsv,text/plain,application/json,text/csv,text/tab-separated-values" multiple hidden>
-              <div>
-                <strong>Drop transcript files here if they are separate</strong>
-                <p>Optional when your persona plan already includes lyrics. Supported: matching `.txt` files, CSV/TSV, JSON, or JSONL with filename + transcript.</p>
-              </div>
-            </label>
-
-            <div id="trainingTranscriptFileList" class="file-list empty-list">
-              <p>No transcript files selected yet.</p>
-            </div>
-
-            <div class="section-head compact">
-              <div>
-                <p class="section-kicker">Step 5</p>
                 <h3>Run settings</h3>
               </div>
             </div>
 
             <div class="field-grid">
               <label class="field">
-                <span>Training length</span>
-                <select id="trainingEpochMode">
-                  <option value="manual-stop">Train until I click Stop (recommended)</option>
-                  <option value="fixed">Stop at the epoch count below</option>
+                <span>Training mode</span>
+                <select id="trainingOutputMode">
+                  <option value="classic-rvc-support">Classic RVC + SUNO audition</option>
+                  <option value="persona-aligned-pth">Paired aligned conversion</option>
+                  <option value="concert-remaster-paired">Concert remaster</option>
                 </select>
-                <small id="trainingEpochModeSummary">Manual-stop keeps Persona v1.0 training until you hit Stop.</small>
+                <small id="trainingModeSummary">Classic RVC + SUNO audition uses `BASE*` as the real target-voice truth, optional `TARGET*` as extra truth, and `SUNO*` only for checkpoint auditions.</small>
+              </label>
+
+              <label class="field">
+                <span>Training epochs</span>
+                <input id="trainingEpochs" type="number" min="1" max="30000" value="600">
+                <small id="trainingEpochModeSummary">This mode runs one direct paired conversion pass for exactly this many epochs.</small>
               </label>
 
               <label class="field">
@@ -1031,53 +928,25 @@
                 </select>
                 <small>RMVPE is still the safest default for most guide-conditioned runs.</small>
               </label>
+
+              <label class="field">
+                <span>Sample rate</span>
+                <select id="trainingSampleRate">
+                  <option value="40k">40k (recommended)</option>
+                  <option value="48k">48k</option>
+                  <option value="32k">32k</option>
+                </select>
+                <small>40k is still the best balance for this direct vocal conversion backbone.</small>
+              </label>
             </div>
 
             <details class="advanced-panel">
               <summary>Advanced trainer settings</summary>
               <div class="advanced-grid">
                 <label class="field">
-                  <span>Sample rate</span>
-                  <select id="trainingSampleRate">
-                    <option value="40k">40k (recommended)</option>
-                    <option value="48k">48k</option>
-                    <option value="32k">32k</option>
-                  </select>
-                </label>
-
-                <label class="field">
-                  <span>Transcript tolerance</span>
-                  <select id="trainingAlignmentTolerance">
-                    <option value="forgiving">Forgiving (recommended)</option>
-                    <option value="balanced">Balanced</option>
-                    <option value="strict">Strict</option>
-                  </select>
-                </label>
-
-                <label class="field">
-                  <span>Warm-up epochs</span>
-                  <input id="trainingWarmupEpochs" type="number" min="0" max="10000" value="200">
-                </label>
-
-                <label class="field">
-                  <span>Curriculum bridge epochs</span>
-                  <input id="trainingBridgeEpochs" type="number" min="0" max="10000" value="500">
-                </label>
-
-                <label class="field">
-                  <span>Full diversity epochs</span>
-                  <input id="trainingFullDiversityEpochs" type="number" min="0" max="10000" value="500">
-                </label>
-
-                <label class="field">
-                  <span>Planned schedule total</span>
-                  <input id="trainingEpochs" type="number" min="1" max="30000" value="1200" readonly>
-                  <small id="trainingCurriculumSummary">Warm-up 200, bridge 500, full diversity 500. Fixed mode will stop after 1200 scheduled epochs.</small>
-                </label>
-
-                <label class="field">
                   <span>Save every</span>
                   <input id="trainingSaveEvery" type="number" min="1" max="1000" value="25">
+                  <small>Writes a fresh checkpoint every N epochs while the direct converter trains.</small>
                 </label>
 
                 <label class="field">
@@ -1092,30 +961,75 @@
                   <small>Lower values track pitch more tightly. 128 to 160 is usually the sweet spot.</small>
                 </label>
               </div>
+              <p class="helper-text" id="trainingCurriculumSummary">Legacy staged scheduling is disabled here. Paired aligned conversion trains as one direct full-vocal run for the epoch count above.</p>
             </details>
 
             <div class="action-row">
-              <button id="startTrainingButton" class="primary-button" type="button">Build Persona v1.0 model</button>
+              <button id="startTrainingButton" class="primary-button" type="button">Build paired conversion model</button>
               <button id="stopTrainingButton" class="ghost-button" type="button" disabled>Stop</button>
+            </div>
+
+            <div class="hidden" aria-hidden="true">
+              <select id="trainingVersion">
+                <option value="v2">Persona v1.1 / v1.0 backbone (v2)</option>
+              </select>
+              <select id="trainingEpochMode">
+                <option value="fixed">Fixed</option>
+              </select>
+              <select id="trainingAlignmentTolerance">
+                <option value="forgiving">Forgiving</option>
+              </select>
+              <select id="trainingPackageDownloadSelect">
+                <option value="">No training packages found yet</option>
+              </select>
+              <button id="downloadTrainingPackageButton" type="button">Download package</button>
+              <small id="trainingPackageDownloadSummary">Pick a training package to download its full folder.</small>
+              <select id="trainingResumePackageSelect">
+                <option value="">Start fresh (no saved package)</option>
+              </select>
+              <select id="trainingStartPhase">
+                <option value="auto">Auto</option>
+                <option value="warm-up">Warm-up</option>
+                <option value="curriculum-bridge">Curriculum bridge</option>
+                <option value="full-diversity">Full diversity</option>
+                <option value="general-refine">General refine</option>
+              </select>
+              <strong id="trainingResumeSummary">Start fresh.</strong>
+              <label id="trainingPlanDropZone" for="trainingPlanFileInput">
+                <input id="trainingPlanFileInput" type="file" accept=".json,application/json,text/plain" multiple hidden>
+              </label>
+              <div id="trainingPlanFileList" class="file-list empty-list">
+                <p>No persona plan uploaded yet.</p>
+              </div>
+              <label id="trainingTranscriptDropZone" for="trainingTranscriptFileInput">
+                <input id="trainingTranscriptFileInput" type="file" accept=".txt,.json,.jsonl,.csv,.tsv,text/plain,application/json,text/csv,text/tab-separated-values" multiple hidden>
+              </label>
+              <div id="trainingTranscriptFileList" class="file-list empty-list">
+                <p>No transcript files selected yet.</p>
+              </div>
             </div>
           </section>
 
           <aside class="panel panel-side">
             <div class="callout side-callout">
               <strong>What this run builds</strong>
-              <p>A guide-conditioned regenerator package plus the pronunciation/rebuild assets used by Persona v1.0 conversion.</p>
+              <p>A conversion voice package. In the stable classic mode it includes a normal RVC `.pth` plus index, while the paired modes still produce the direct aligned bundle.</p>
             </div>
 
             <div id="trainingStatusCard" class="status-card idle">
               <p class="status-label">Status</p>
-              <strong id="trainingStatusTitle">Waiting for audio + plan</strong>
-              <p id="trainingStatusMessage">Upload the audio set, add a persona plan manifest, then build the Persona v1.0 package.</p>
+              <strong id="trainingStatusTitle">Waiting for training audio</strong>
+              <p id="trainingStatusMessage">Upload `BASE` clips and, if you want fixed auditions, `SUNO` clips. Then start the build.</p>
               <div class="progress-shell">
                 <div id="trainingProgressBar" class="progress-bar"></div>
               </div>
             </div>
 
             <div id="trainingResultSummary" class="result-summary hidden"></div>
+            <div id="trainingCheckpointPreview" class="result-summary hidden">
+              <div id="trainingCheckpointPreviewMeta"></div>
+              <audio id="trainingCheckpointPreviewPlayer" class="managed-audio-source"></audio>
+            </div>
             <pre id="trainingLog" class="training-log">Training logs will appear here.</pre>
           </aside>
         </div>
@@ -1123,6 +1037,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260415b"></script>
+  <script src="/static/app.js?v=20260421a"></script>
 </body>
 </html>
