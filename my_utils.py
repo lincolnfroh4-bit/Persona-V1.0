@@ -19,17 +19,43 @@ platform_stft_mapping = {
 stft = platform_stft_mapping.get(sys.platform)
 # praatEXE = join('.',os.path.abspath(os.getcwd()) + r"\Praat.exe")
 
+FORMANT_DEFAULTS = ("false", "1.0", "1.0")
+
+
+def _ensure_parent_dir(path: str) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def _read_formant_csv(path: str):
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, newline="") as fileCSVread:
+            rows = list(csv.reader(fileCSVread))
+    except Exception:
+        return None
+    if not rows or len(rows[0]) < 3:
+        return None
+    return rows[0][0], rows[0][1], rows[0][2]
+
+
+def _write_formant_defaults(path: str) -> None:
+    _ensure_parent_dir(path)
+    with open(path, "w", newline="") as fileCSVwrite:
+        csv_writer = csv.writer(fileCSVwrite, delimiter=",")
+        csv_writer.writerow(list(FORMANT_DEFAULTS))
+
 
 def CSVutil(file, rw, type, *args):
     if type == "formanting":
         if rw == "r":
-            with open(file) as fileCSVread:
-                csv_reader = list(csv.reader(fileCSVread))
-                return (
-                    (csv_reader[0][0], csv_reader[0][1], csv_reader[0][2])
-                    if csv_reader is not None
-                    else (lambda: exec('raise ValueError("No data")'))()
-                )
+            csv_values = _read_formant_csv(file)
+            if csv_values is None:
+                _write_formant_defaults(file)
+                return FORMANT_DEFAULTS
+            return csv_values
         else:
             if args:
                 doformnt = args[0]
@@ -37,11 +63,13 @@ def CSVutil(file, rw, type, *args):
                 doformnt = False
             qfr = args[1] if len(args) > 1 else 1.0
             tmb = args[2] if len(args) > 2 else 1.0
+            _ensure_parent_dir(file)
             with open(file, rw, newline="") as fileCSVwrite:
                 csv_writer = csv.writer(fileCSVwrite, delimiter=",")
                 csv_writer.writerow([doformnt, qfr, tmb])
     elif type == "stop":
         stop = args[0] if args else False
+        _ensure_parent_dir(file)
         with open(file, rw, newline="") as fileCSVwrite:
             csv_writer = csv.writer(fileCSVwrite, delimiter=",")
             csv_writer.writerow([stop])

@@ -4,6 +4,7 @@ import math
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import shutil
@@ -12,13 +13,12 @@ from typing import Callable, Dict, List, Optional
 from urllib.request import urlretrieve
 
 import faiss
-import librosa
 import numpy as np
 import torch
+
+from simple_modes import ALIGNED_SUNO_MODE, NORMAL_RVC_MODE
 from sklearn.cluster import MiniBatchKMeans
 from scipy.io import wavfile
-
-from my_utils import load_audio
 
 
 class StageInterruptedError(InterruptedError):
@@ -55,6 +55,91 @@ class SimpleTrainer:
         self.pretrained_v2_root = self.repo_root / "pretrained_v2"
         self.lock = threading.Lock()
 
+    def _make_run_capture_path(self, exp_dir: Path, stage_name: str) -> Path:
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        return exp_dir / f"_{stage_name}_{timestamp}.capture.log"
+
+    def _get_classic_rvc_hardware_profile(
+        self,
+        *,
+        training_slice_count: int,
+        sample_rate: str,
+        version: str,
+        use_f0: bool,
+    ) -> Dict[str, object]:
+        cpu_count = max(1, os.cpu_count() or 1)
+        gpu_memory_gb = 0.0
+        if torch.cuda.is_available():
+            try:
+                gpu_memory_gb = float(torch.cuda.get_device_properties(0).total_memory) / float(1024**3)
+            except Exception:
+                gpu_memory_gb = 0.0
+        worker_cap = 12 if os.name == "nt" else 10
+        if not torch.cuda.is_available():
+            return {
+                "gpu_memory_gb": round(gpu_memory_gb, 2),
+                "max_batch_size": min(4, max(1, training_slice_count)),
+                "num_workers": min(4, cpu_count),
+                "prefetch_factor": 2,
+                "pin_memory": False,
+                "persistent_workers": False,
+                "cache_data_in_gpu": False,
+                "enable_cudnn": False,
+                "enable_tf32": False,
+            }
+
+        base_max_batch = 8 if use_f0 else 10
+        if gpu_memory_gb >= 46.0:
+            base_max_batch = 20 if use_f0 else 24
+        elif gpu_memory_gb >= 30.0:
+            base_max_batch = 16 if use_f0 else 20
+        elif gpu_memory_gb >= 24.0:
+            base_max_batch = 12 if use_f0 else 16
+
+        sample_rate_penalty = 0
+        if str(sample_rate) == "48k":
+            sample_rate_penalty = 2
+        elif str(sample_rate) == "40k":
+            sample_rate_penalty = 0
+        else:
+            sample_rate_penalty = 1
+        if str(version) == "v2" and use_f0:
+            sample_rate_penalty += 0
+
+        max_batch_size = max(2, base_max_batch - sample_rate_penalty)
+        if training_slice_count > 0:
+            max_batch_size = min(max_batch_size, max(2, training_slice_count // 4))
+
+        cache_data_in_gpu = bool(
+            gpu_memory_gb >= 24.0
+            and training_slice_count > 0
+            and training_slice_count <= 1800
+            and max_batch_size <= 16
+        )
+        if gpu_memory_gb >= 46.0 and training_slice_count <= 3200:
+            cache_data_in_gpu = True
+
+        return {
+            "gpu_memory_gb": round(gpu_memory_gb, 2),
+            "max_batch_size": int(max_batch_size),
+            "num_workers": min(worker_cap, cpu_count),
+            "prefetch_factor": 4 if gpu_memory_gb >= 24.0 else 3,
+            "pin_memory": True,
+            "persistent_workers": True,
+            "cache_data_in_gpu": cache_data_in_gpu,
+            "enable_cudnn": True,
+            "enable_tf32": True,
+        }
+
+    def _can_use_gpu_rmvpe(self) -> bool:
+        if not torch.cuda.is_available():
+            return False
+        try:
+            total_memory_gb = float(torch.cuda.get_device_properties(0).total_memory) / float(1024**3)
+        except Exception:
+            return False
+        return total_memory_gb >= 20.0
+
     def get_options(self) -> Dict[str, object]:
         cuda_available = bool(torch.cuda.is_available())
         warning = ""
@@ -69,46 +154,26 @@ class SimpleTrainer:
             "f0_methods": ["rmvpe", "mangio-crepe", "crepe", "harvest", "dio", "pm"],
             "output_modes": [
                 {
-                    "id": "classic-rvc-support",
-                    "label": "Classic RVC + SUNO audition",
-                    "description": "Builds a standard RVC .pth and index from the real BASE target vocals first, with optional extra true-target clips. SUNO clips are kept out of the speaker-truth dataset and used instead for fixed checkpoint audition previews so you can hear how the current model handles that source domain.",
+                    "id": NORMAL_RVC_MODE,
+                    "label": "Normal RVC",
+                    "description": "Builds a standard RVC .pth and index from real target-voice clips. Use this when you want a normal voice model for standard conversion.",
                 },
                 {
-                    "id": "persona-aligned-pth",
-                    "label": "Paired aligned conversion",
-                    "description": "Uses BASE identity clips plus tightly aligned TARGET/SUNO pairs to train a direct full-vocal .pth converter, and over-samples perceptual detail windows where the target has more edge, articulation, or texture than the aligned SUNO source.",
-                },
-                {
-                    "id": "concert-remaster-paired",
-                    "label": "Concert remaster",
-                    "description": "Uses matched CONCERT and CD clips to train a direct learned remaster bundle that maps live concert vocals toward CD-quality output without relying on EQ-only processing.",
-                },
-                {
-                    "id": "persona-lyric-repair",
-                    "label": "Persona lyric repair",
-                    "description": "Builds a lyric-only target vocal package that focuses on clean lead conversion, adlib suppression, and dense pronunciation repair instead of full vocal regeneration.",
-                },
-                {
-                    "id": "persona-v1.1",
-                    "label": "Persona v1.1",
-                    "description": "Builds the overhauled guide-conditioned package with guide-delta supervision, contextual identity conditioning, stronger temporal coherence losses, and optional legacy-checkpoint reform into the new v1.1 architecture.",
-                },
-                {
-                    "id": "persona-v1",
-                    "label": "Persona v1.0",
-                    "description": "Builds the direct voice-builder package only: paired-song regenerator, pronunciation assets, and the persona manifest used by the new conversion flow.",
+                    "id": ALIGNED_SUNO_MODE,
+                    "label": "Aligned SUNO to Target",
+                    "description": "Uses BASE identity clips plus tightly aligned TARGET and SUNO clips to train a direct SUNO-to-target vocal mapper with DTW-warped pairs, balanced identity sampling, and focused detail windows.",
                 },
             ],
             "alignment_tolerances": [
                 {
                     "id": "forgiving",
                     "label": "Forgiving",
-                    "description": "Best default. Small naming or duration mismatches are tolerated instead of failing the aligned package build immediately.",
+                    "description": "Most tolerant. Small naming or duration mismatches are accepted so more candidate pairs survive dataset assembly.",
                 },
                 {
                     "id": "balanced",
                     "label": "Balanced",
-                    "description": "Keeps only cleaner aligned matches when assembling the paired conversion dataset.",
+                    "description": "Recommended default. Keeps cleaner aligned matches without becoming so strict that the paired dataset collapses.",
                 },
                 {
                     "id": "strict",
@@ -122,22 +187,21 @@ class SimpleTrainer:
                 "JSON/JSONL with filename + transcript objects",
             ],
             "phoneme_note": (
-                "Classic RVC + SUNO audition keeps BASE clips as the real target-voice truth and re-renders the same "
-                "short SUNO source chunk at each checkpoint so you can hear progress. Paired aligned conversion still "
-                "uses matched TARGET/SUNO clips for exact source-to-target supervision."
+                "Normal RVC learns from true target-voice audio only. Aligned SUNO to Target learns a direct SUNO -> "
+                "target mapping from matched TARGET/SUNO pairs plus a smaller BASE identity set."
             ),
             "rebuild_note": (
-                "The stable classic package stores a standard .pth backbone plus index, along with metadata showing "
-                "which BASE, TARGET, and SUNO clips were used for truth audio versus checkpoint auditions."
+                "Normal RVC packages store a standard .pth and index. Aligned SUNO to Target packages store a direct "
+                "guide-conditioned mapper plus metadata describing the BASE/TARGET/SUNO pair set used for training."
             ),
             "training_plan_note": (
-                "These modes do not need a persona plan. Use BASE for the true target voice, optional TARGET/VOCALP "
-                "for extra true-target coverage, and SUNO/PREP/PRE for fixed checkpoint audition sources."
+                "These modes do not need transcripts or a persona plan. For aligned training, use BASE clips for the "
+                "target voice identity plus matching TARGET_xxx and SUNO_xxx clips for paired supervision."
             ),
             "cuda_available": cuda_available,
             "warning": warning,
             "defaults": {
-                "output_mode": "classic-rvc-support",
+                "output_mode": NORMAL_RVC_MODE,
             },
         }
 
@@ -184,22 +248,71 @@ class SimpleTrainer:
             exp_dir.mkdir(parents=True, exist_ok=True)
 
             sr_hz = self.SAMPLE_RATE_MAP[sample_rate]
-            cpu_threads = max(1, min(6, os.cpu_count() or 1))
+            cpu_threads = max(1, min(12, os.cpu_count() or 1))
+            rmvpe_uses_gpu = bool(use_f0 and f0_method == "rmvpe" and self._can_use_gpu_rmvpe())
+            if use_f0 and f0_method == "rmvpe":
+                if rmvpe_uses_gpu:
+                    cpu_threads = 1
+                else:
+                    # CPU RMVPE can scale to a few workers, but we still cap it
+                    # to keep the legacy extractor stable.
+                    cpu_threads = max(1, min(4, cpu_threads))
+
+            extract_capture = self._make_run_capture_path(exp_dir, "extract")
+            train_capture = self._make_run_capture_path(exp_dir, "train")
+            preprocess_capture = self._make_run_capture_path(exp_dir, "preprocess")
 
             update_status(
                 "prepare-dataset",
-                "Copying your dataset directly into training format with no isolation or slicing...",
+                "Preparing the dataset with the classic RVC slicer and chunking pipeline...",
                 "",
                 32,
             )
-            self._prepare_dataset_without_preprocessing(
+            self._prepare_dataset_with_classic_preprocess(
                 dataset_dir=dataset_dir,
                 exp_dir=exp_dir,
                 sample_rate=sr_hz,
+                worker_count=cpu_threads,
                 update_status=update_status,
                 start_progress=32,
-                end_progress=42,
+                end_progress=46,
+                capture_path=preprocess_capture,
                 cancel_event=cancel_event,
+            )
+            training_slice_count = self._count_training_slices(exp_dir)
+            classic_profile = self._get_classic_rvc_hardware_profile(
+                training_slice_count=training_slice_count,
+                sample_rate=sample_rate,
+                version=version,
+                use_f0=use_f0,
+            )
+            effective_batch_size = self._effective_batch_size(
+                requested_batch_size=batch_size,
+                use_f0=use_f0,
+                version=version,
+                training_slice_count=training_slice_count,
+                max_batch_size=int(classic_profile["max_batch_size"]),
+            )
+            if effective_batch_size != batch_size:
+                update_status(
+                    "prepare-dataset",
+                    (
+                        f"Using effective batch size {effective_batch_size} instead of {batch_size} "
+                        f"for {training_slice_count} classic RVC slices on this GPU."
+                    ),
+                    "",
+                    47,
+                )
+            batch_size = effective_batch_size
+            update_status(
+                "prepare-dataset",
+                (
+                    f"Classic RVC slices {training_slice_count} | batch {batch_size} | "
+                    f"workers {int(classic_profile['num_workers'])} | "
+                    f"gpu cache {'on' if bool(classic_profile['cache_data_in_gpu']) else 'off'}"
+                ),
+                "",
+                48,
             )
 
             extract_log = exp_dir / "extract_f0_feature.log"
@@ -227,8 +340,15 @@ class SimpleTrainer:
                         stage_name="extract-f0",
                         progress=56,
                         log_path=extract_log,
+                        capture_path=extract_capture,
                         update_status=update_status,
                         cancel_event=cancel_event,
+                        env_overrides={
+                            "RVC_FORCE_RMVPE_CPU": (
+                                "0" if (f0_method == "rmvpe" and rmvpe_uses_gpu) else "1"
+                            ),
+                            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+                        },
                     )
 
                 update_status(
@@ -250,8 +370,12 @@ class SimpleTrainer:
                     stage_name="extract-features",
                     progress=70,
                     log_path=extract_log,
+                    capture_path=extract_capture,
                     update_status=update_status,
                     cancel_event=cancel_event,
+                    env_overrides={
+                        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+                    },
                 )
 
                 self._write_filelist(
@@ -286,6 +410,8 @@ class SimpleTrainer:
                     pretrained_d=pretrained_d,
                     progress=88,
                     log_path=train_log,
+                    capture_path=train_capture,
+                    classic_profile=classic_profile,
                     update_status=update_status,
                     cancel_event=cancel_event,
                     checkpoint_callback=checkpoint_callback,
@@ -303,18 +429,17 @@ class SimpleTrainer:
                 stopped_early = True
 
             checkpoint_files = sorted(exp_dir.glob("G_*.pth"))
-            if not checkpoint_files:
-                raise RuntimeError(
-                    self._summarize_training_failure(train_log)
-                    or "Training did not produce any generator checkpoints."
-                )
-
             model_path = self.weights_root / f"{experiment_name}.pth"
             if not model_path.exists():
                 latest_saved_model = self._find_latest_saved_weight(experiment_name)
                 if latest_saved_model is not None:
                     model_path = latest_saved_model
                 else:
+                    if not checkpoint_files:
+                        raise RuntimeError(
+                            self._summarize_training_failure(train_log, train_capture)
+                            or "Training did not produce any usable checkpoints."
+                        )
                     raise RuntimeError(
                         "Training finished but no usable model file was written."
                     )
@@ -369,6 +494,8 @@ class SimpleTrainer:
         pretrained_d: Path,
         progress: int,
         log_path: Optional[Path],
+        capture_path: Path,
+        classic_profile: Dict[str, object],
         update_status: Callable[[str, str, str, int], None],
         cancel_event: Optional[threading.Event] = None,
         checkpoint_callback: Optional[Callable[[Dict[str, object]], None]] = None,
@@ -395,7 +522,7 @@ class SimpleTrainer:
             "-l",
             "1",
             "-c",
-            "0",
+            "1" if bool(classic_profile.get("cache_data_in_gpu", False)) else "0",
             "-sw",
             "1",
             "-v",
@@ -403,18 +530,29 @@ class SimpleTrainer:
             "-li",
             str(self._set_log_interval(exp_dir, batch_size)),
         ]
-        capture_path = self.logs_root / "_simple_web_training_capture.log"
         capture_path.parent.mkdir(parents=True, exist_ok=True)
+        capture_path.write_text("", encoding="utf-8")
         metric_state: Dict[str, float] = {}
         last_preview_epoch = 0
         with capture_path.open("a", encoding="utf-8", errors="ignore") as capture:
             capture.write(f"\n\n[train] {' '.join(command)}\n")
             capture.flush()
+            env = os.environ.copy()
+            env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+            env["RVC_TRAIN_NUM_WORKERS"] = str(int(classic_profile.get("num_workers", 4)))
+            env["RVC_TRAIN_PREFETCH_FACTOR"] = str(int(classic_profile.get("prefetch_factor", 2)))
+            env["RVC_TRAIN_PIN_MEMORY"] = "1" if bool(classic_profile.get("pin_memory", True)) else "0"
+            env["RVC_TRAIN_PERSISTENT_WORKERS"] = (
+                "1" if bool(classic_profile.get("persistent_workers", True)) else "0"
+            )
+            env["RVC_TRAIN_ENABLE_CUDNN"] = "1" if bool(classic_profile.get("enable_cudnn", True)) else "0"
+            env["RVC_TRAIN_ENABLE_TF32"] = "1" if bool(classic_profile.get("enable_tf32", True)) else "0"
             process = subprocess.Popen(
                 command,
                 cwd=str(self.repo_root),
                 stdout=capture,
                 stderr=subprocess.STDOUT,
+                env=env,
             )
             while process.poll() is None:
                 if cancel_event is not None and cancel_event.is_set():
@@ -476,9 +614,7 @@ class SimpleTrainer:
         final_log = self._tail_file(source)
         if return_code != 0:
             capture_log = self._tail_file(capture_path)
-            failure_summary = ""
-            if log_path:
-                failure_summary = self._summarize_training_failure(log_path)
+            failure_summary = self._summarize_training_failure(log_path, capture_path)
             raise RuntimeError(
                 failure_summary
                 or capture_log
@@ -487,9 +623,22 @@ class SimpleTrainer:
             )
 
     def _python_cmd(self) -> str:
-        venv_python = self.repo_root / ".venv" / "Scripts" / "python.exe"
-        if venv_python.exists():
-            return str(venv_python)
+        candidate_paths = [
+            self.repo_root / ".venv" / "Scripts" / "python.exe",
+            self.repo_root / ".venv" / "bin" / "python",
+        ]
+        for candidate in candidate_paths:
+            if candidate.exists():
+                return str(candidate)
+
+        active_python = Path(sys.executable) if sys.executable else None
+        if active_python is not None and active_python.exists():
+            return str(active_python)
+
+        path_python = shutil.which("python3") or shutil.which("python")
+        if path_python:
+            return path_python
+
         return "python"
 
     def _run_stage(
@@ -499,20 +648,26 @@ class SimpleTrainer:
         stage_name: str,
         progress: int,
         log_path: Optional[Path],
+        capture_path: Path,
         update_status: Callable[[str, str, str, int], None],
         cancel_event: Optional[threading.Event] = None,
+        env_overrides: Optional[Dict[str, str]] = None,
     ) -> None:
-        capture_path = self.logs_root / "_simple_web_training_capture.log"
         capture_path.parent.mkdir(parents=True, exist_ok=True)
+        capture_path.write_text("", encoding="utf-8")
         metric_state: Dict[str, float] = {}
         with capture_path.open("a", encoding="utf-8", errors="ignore") as capture:
             capture.write(f"\n\n[{stage_name}] {' '.join(command)}\n")
             capture.flush()
+            env = os.environ.copy()
+            if env_overrides:
+                env.update(env_overrides)
             process = subprocess.Popen(
                 command,
                 cwd=str(self.repo_root),
                 stdout=capture,
                 stderr=subprocess.STDOUT,
+                env=env,
             )
             while process.poll() is None:
                 if cancel_event is not None and cancel_event.is_set():
@@ -544,9 +699,7 @@ class SimpleTrainer:
         final_log = self._tail_file(source)
         if return_code != 0:
             capture_log = self._tail_file(capture_path)
-            failure_summary = ""
-            if stage_name == "train" and log_path:
-                failure_summary = self._summarize_training_failure(log_path)
+            failure_summary = self._summarize_training_failure(log_path, capture_path)
             raise RuntimeError(
                 failure_summary
                 or capture_log
@@ -643,13 +796,16 @@ class SimpleTrainer:
             )
         return generator_path, discriminator_path
 
-    def _summarize_training_failure(self, train_log: Path) -> str:
+    def _summarize_training_failure(
+        self,
+        train_log: Optional[Path],
+        capture_log: Optional[Path],
+    ) -> str:
         combined = []
-        if train_log.exists():
+        if train_log and train_log.exists():
             combined.extend(train_log.read_text(encoding="utf-8", errors="ignore").splitlines())
-        capture_path = self.logs_root / "_simple_web_training_capture.log"
-        if capture_path.exists():
-            combined.extend(capture_path.read_text(encoding="utf-8", errors="ignore").splitlines())
+        if capture_log and capture_log.exists():
+            combined.extend(capture_log.read_text(encoding="utf-8", errors="ignore").splitlines())
 
         interesting = [
             line.strip()
@@ -658,7 +814,12 @@ class SimpleTrainer:
                 token in line
                 for token in (
                     "RuntimeError:",
+                    "torch.OutOfMemoryError:",
                     "AssertionError:",
+                    "AttributeError:",
+                    "FileNotFoundError:",
+                    "ModuleNotFoundError:",
+                    "PermissionError:",
                     "Error(s) in loading state_dict",
                     "size mismatch",
                     "Torch not compiled with CUDA enabled",
@@ -667,18 +828,20 @@ class SimpleTrainer:
             )
         ]
         if not interesting:
-            return self._tail_file(train_log) or self._tail_file(capture_path)
+            return self._tail_file(train_log) or self._tail_file(capture_log)
         return "\n".join(interesting[-8:])
 
-    def _prepare_dataset_without_preprocessing(
+    def _prepare_dataset_with_classic_preprocess(
         self,
         *,
         dataset_dir: Path,
         exp_dir: Path,
         sample_rate: int,
+        worker_count: int,
         update_status: Callable[[str, str, str, int], None],
         start_progress: int,
         end_progress: int,
+        capture_path: Path,
         cancel_event: Optional[threading.Event] = None,
     ) -> None:
         if not dataset_dir.exists():
@@ -692,47 +855,141 @@ class SimpleTrainer:
         if not source_files:
             raise RuntimeError("No supported audio files were found in the dataset folder.")
 
-        gt_wavs_dir = exp_dir / "0_gt_wavs"
-        wavs16k_dir = exp_dir / "1_16k_wavs"
-        for target_dir in (gt_wavs_dir, wavs16k_dir):
+        stage_dir = exp_dir / "_source_audio"
+        if stage_dir.exists():
+            shutil.rmtree(stage_dir, ignore_errors=True)
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        for target_dir in (exp_dir / "0_gt_wavs", exp_dir / "1_16k_wavs"):
             if target_dir.exists():
-                shutil.rmtree(target_dir)
-            target_dir.mkdir(parents=True, exist_ok=True)
+                shutil.rmtree(target_dir, ignore_errors=True)
 
         total_files = len(source_files)
         for index, source_path in enumerate(source_files, start=1):
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("Training stopped by user.")
-            try:
-                audio = load_audio(str(source_path), sample_rate, False, 1.0, 1.0)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Could not read training audio '{source_path.name}': {exc}"
-                ) from exc
-
-            if audio is None or len(audio) == 0:
-                raise RuntimeError(
-                    f"Training audio '{source_path.name}' is empty after loading."
-                )
-
-            audio = np.asarray(audio, dtype=np.float32)
-            target_name = f"{index:04d}_{self._safe_dataset_stem(source_path.stem)}.wav"
-            gt_target = gt_wavs_dir / target_name
-            wav16_target = wavs16k_dir / target_name
-
-            wavfile.write(str(gt_target), sample_rate, audio.astype(np.float32))
-            audio_16k = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-            wavfile.write(str(wav16_target), 16000, np.asarray(audio_16k, dtype=np.float32))
+            target_name = f"{index:04d}_{self._safe_dataset_stem(source_path.stem)}{source_path.suffix.lower()}"
+            shutil.copy2(source_path, stage_dir / target_name)
 
             progress = start_progress + int(
-                round(((index / total_files) * max(0, end_progress - start_progress)))
+                round(((index / total_files) * max(0, (end_progress - start_progress) // 2)))
             )
             update_status(
                 "prepare-dataset",
-                f"Prepared {index}/{total_files} training files with no preprocessing.",
+                f"Staged {index}/{total_files} source files for classic RVC preprocessing.",
                 source_path.name,
-                min(end_progress, progress),
+                min(end_progress - 2, progress),
             )
+
+        preprocess_log = exp_dir / "preprocess.log"
+        preprocess_log.write_text("", encoding="utf-8")
+        self._run_stage(
+            [
+                self._python_cmd(),
+                "trainset_preprocess_pipeline_print.py",
+                str(stage_dir),
+                str(sample_rate),
+                str(max(1, min(12, worker_count))),
+                str(exp_dir),
+                "False",
+            ],
+            stage_name="prepare-dataset",
+            progress=max(start_progress + 1, end_progress - 1),
+            log_path=preprocess_log,
+            capture_path=capture_path,
+            update_status=update_status,
+            cancel_event=cancel_event,
+        )
+
+        slice_count = self._count_training_slices(exp_dir)
+        if slice_count <= 0:
+            failure_summary = self._summarize_preprocess_zero_output(
+                preprocess_log=preprocess_log,
+                stage_dir=stage_dir,
+            )
+            raise RuntimeError(
+                failure_summary
+                or "Classic RVC preprocessing finished, but it produced zero usable slices."
+            )
+        update_status(
+            "prepare-dataset",
+            f"Classic RVC preprocessing produced {slice_count} training slices.",
+            "",
+            end_progress,
+        )
+
+    def _count_training_slices(self, exp_dir: Path) -> int:
+        gt_wavs_dir = exp_dir / "0_gt_wavs"
+        if not gt_wavs_dir.exists():
+            return 0
+        return len(list(gt_wavs_dir.glob("*.wav")))
+
+    def _effective_batch_size(
+        self,
+        *,
+        requested_batch_size: int,
+        use_f0: bool,
+        version: str,
+        training_slice_count: int,
+        max_batch_size: int,
+    ) -> int:
+        batch_size = max(1, int(requested_batch_size))
+        if training_slice_count > 0:
+            batch_size = min(batch_size, max(2, training_slice_count // 4))
+
+        batch_size = min(batch_size, max(1, int(max_batch_size)))
+
+        if not torch.cuda.is_available():
+            return min(batch_size, 4)
+        return batch_size
+
+    def _summarize_preprocess_zero_output(
+        self,
+        *,
+        preprocess_log: Optional[Path],
+        stage_dir: Optional[Path] = None,
+    ) -> str:
+        details: List[str] = []
+        if stage_dir is not None and stage_dir.exists():
+            staged_count = len(list(stage_dir.iterdir()))
+            details.append(f"Staged source clips: {staged_count}.")
+        if preprocess_log is None or not preprocess_log.exists():
+            if details:
+                return "Classic RVC preprocessing produced zero slices. " + " ".join(details)
+            return "Classic RVC preprocessing produced zero slices."
+
+        log_lines = preprocess_log.read_text(encoding="utf-8", errors="ignore").splitlines()
+        interesting = [
+            line.strip()
+            for line in log_lines
+            if any(
+                token in line
+                for token in (
+                    "Traceback",
+                    "FileNotFoundError",
+                    "ModuleNotFoundError",
+                    "RuntimeError",
+                    "Failed to load audio",
+                    "->",
+                )
+            )
+        ]
+        if interesting:
+            excerpt = "\n".join(interesting[-12:])
+            prefix = "Classic RVC preprocessing produced zero slices."
+            if details:
+                prefix = f"{prefix} {' '.join(details)}"
+            return f"{prefix}\n{excerpt}"
+
+        fallback_tail = self._tail_file(preprocess_log)
+        if fallback_tail:
+            prefix = "Classic RVC preprocessing produced zero slices."
+            if details:
+                prefix = f"{prefix} {' '.join(details)}"
+            return f"{prefix}\n{fallback_tail}"
+        if details:
+            return "Classic RVC preprocessing produced zero slices. " + " ".join(details)
+        return "Classic RVC preprocessing produced zero slices."
 
     def _find_latest_saved_weight(self, experiment_name: str) -> Optional[Path]:
         candidates = sorted(
@@ -818,6 +1075,11 @@ class SimpleTrainer:
                 )
 
         feature_dim = 256 if version == "v1" else 768
+        self._ensure_mute_assets(
+            sample_rate=sample_rate,
+            feature_dim=feature_dim,
+            use_f0=use_f0,
+        )
         mute_root = self.logs_root / "mute"
         mute_wav = mute_root / "0_gt_wavs" / f"mute{sample_rate}.wav"
         mute_feature = mute_root / f"3_feature{feature_dim}" / "mute.npy"
@@ -851,6 +1113,49 @@ class SimpleTrainer:
             )
 
         (exp_dir / "filelist.txt").write_text("\n".join(entries), encoding="utf-8")
+
+    def _ensure_mute_assets(
+        self,
+        *,
+        sample_rate: str,
+        feature_dim: int,
+        use_f0: bool,
+    ) -> None:
+        mute_root = self.logs_root / "mute"
+        sample_rate_hz = self.SAMPLE_RATE_MAP[sample_rate]
+        silence_seconds = 1.0
+        silence_samples = max(1, int(round(sample_rate_hz * silence_seconds)))
+        feature_frames = max(1, int(round((16000 * silence_seconds) / 160)))
+
+        wav_dir = mute_root / "0_gt_wavs"
+        feature_dir = mute_root / f"3_feature{feature_dim}"
+        f0_dir = mute_root / "2a_f0"
+        f0nsf_dir = mute_root / "2b-f0nsf"
+
+        wav_dir.mkdir(parents=True, exist_ok=True)
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        if use_f0:
+            f0_dir.mkdir(parents=True, exist_ok=True)
+            f0nsf_dir.mkdir(parents=True, exist_ok=True)
+
+        mute_wav_path = wav_dir / f"mute{sample_rate}.wav"
+        if not mute_wav_path.exists():
+            silence = np.zeros(silence_samples, dtype=np.float32)
+            wavfile.write(str(mute_wav_path), sample_rate_hz, silence)
+
+        mute_feature_path = feature_dir / "mute.npy"
+        if not mute_feature_path.exists():
+            mute_feature = np.zeros((feature_frames, feature_dim), dtype=np.float32)
+            np.save(mute_feature_path, mute_feature, allow_pickle=False)
+
+        if use_f0:
+            mute_f0 = np.zeros(feature_frames, dtype=np.float32)
+            mute_f0_path = f0_dir / "mute.wav.npy"
+            mute_f0nsf_path = f0nsf_dir / "mute.wav.npy"
+            if not mute_f0_path.exists():
+                np.save(mute_f0_path, mute_f0, allow_pickle=False)
+            if not mute_f0nsf_path.exists():
+                np.save(mute_f0nsf_path, mute_f0, allow_pickle=False)
 
     def _set_log_interval(self, exp_dir: Path, batch_size: int) -> int:
         wav_dir = exp_dir / "1_16k_wavs"

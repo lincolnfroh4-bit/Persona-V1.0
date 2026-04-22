@@ -10,6 +10,8 @@ import ffmpeg
 import numpy as np
 import soundfile as sf
 
+from simple_modes import is_classic_rvc_package_mode, is_direct_aligned_package_mode
+
 
 class MasterConversionEngine:
     DEFAULT_PROFILE = "studio"
@@ -690,6 +692,31 @@ class MasterConversionEngine:
         )
         return metadata
 
+    def _resolve_manifest_artifact_path(self, manifest_path: Path, raw_value: str) -> str:
+        value = str(raw_value or "").strip()
+        if not value:
+            return ""
+        raw_path = Path(value)
+        if raw_path.exists():
+            return str(raw_path)
+
+        candidates: List[Path] = []
+        if not raw_path.is_absolute():
+            candidates.append(manifest_path.parent / raw_path)
+        for depth in (1, 2, 3):
+            if len(raw_path.parts) >= depth:
+                candidates.append(manifest_path.parent.joinpath(*raw_path.parts[-depth:]))
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            candidate_key = str(candidate)
+            if candidate_key in seen:
+                continue
+            seen.add(candidate_key)
+            if candidate.exists():
+                return str(candidate)
+        return value
+
     def _resolve_guided_regeneration_bundle(self, settings: Dict[str, object]) -> Dict[str, str]:
         manifest_value = str(settings.get("pipa_manifest_path", "") or "").strip()
         if not manifest_value:
@@ -703,30 +730,35 @@ class MasterConversionEngine:
             return {}
         if not isinstance(manifest, dict):
             return {}
-        checkpoint_value = str(manifest.get("guided_regeneration_path", "") or "").strip()
+        checkpoint_value = self._resolve_manifest_artifact_path(
+            manifest_path,
+            manifest.get("guided_regeneration_path", "") or "",
+        )
         if not checkpoint_value:
             return {}
         checkpoint_path = Path(checkpoint_value)
-        if not checkpoint_path.is_absolute():
-            checkpoint_path = manifest_path.parent / checkpoint_path
         if not checkpoint_path.exists():
             return {}
-        config_value = str(manifest.get("guided_regeneration_config_path", "") or "").strip()
+        config_value = self._resolve_manifest_artifact_path(
+            manifest_path,
+            manifest.get("guided_regeneration_config_path", "") or "",
+        )
         config_path = Path(config_value) if config_value else Path()
-        if config_value and not config_path.is_absolute():
-            config_path = manifest_path.parent / config_path
-        report_value = str(manifest.get("guided_regeneration_report_path", "") or "").strip()
+        report_value = self._resolve_manifest_artifact_path(
+            manifest_path,
+            manifest.get("guided_regeneration_report_path", "") or "",
+        )
         report_path = Path(report_value) if report_value else Path()
-        if report_value and not report_path.is_absolute():
-            report_path = manifest_path.parent / report_path
-        training_report_value = str(manifest.get("training_report_path", "") or "").strip()
+        training_report_value = self._resolve_manifest_artifact_path(
+            manifest_path,
+            manifest.get("training_report_path", "") or "",
+        )
         training_report_path = Path(training_report_value) if training_report_value else Path()
-        if training_report_value and not training_report_path.is_absolute():
-            training_report_path = manifest_path.parent / training_report_path
-        stats_value = str(manifest.get("guided_regeneration_stats_path", "") or "").strip()
+        stats_value = self._resolve_manifest_artifact_path(
+            manifest_path,
+            manifest.get("guided_regeneration_stats_path", "") or "",
+        )
         stats_path = Path(stats_value) if stats_value else Path()
-        if stats_value and not stats_path.is_absolute():
-            stats_path = manifest_path.parent / stats_path
         return {
             "manifest_path": str(manifest_path),
             "checkpoint_path": str(checkpoint_path),
@@ -976,32 +1008,60 @@ class MasterConversionEngine:
             update_status(
                 {
                     "progress": 8,
-                    "message": "Preparing the source audio for direct pronunciation-guided conversion.",
+                    "message": "Preparing the direct model render.",
                 }
             )
 
-        profile = self.PROFILES[normalized_profile]
-        source_reference = self._prepare_source_reference(
-            input_path=input_path,
-            output_dir=output_dir / "source",
-            preprocess_mode=normalized_preprocess_mode,
-            preprocess_strength=int(candidate_strength),
-        )
+        packaged_source_dir = output_dir / "source"
+        packaged_source_dir.mkdir(parents=True, exist_ok=True)
+        packaged_source_path = packaged_source_dir / input_path.name
+        if Path(str(input_path)).resolve() != packaged_source_path.resolve():
+            shutil.copy2(str(input_path), str(packaged_source_path))
 
         if cancel_event.is_set():
             raise RuntimeError("Master Conversion was cancelled.")
 
         guided_bundle = self._resolve_guided_regeneration_bundle(settings)
         use_full_blueprint_conversion = bool(str(guided_bundle.get("checkpoint_path", "") or "").strip())
+        selected_package_mode = str(settings.get("output_mode", "") or "").strip().lower()
+        guided_training_mode = ""
+        guided_config_value = str(guided_bundle.get("config_path", "") or "").strip()
+        if guided_config_value:
+            guided_config_path = Path(guided_config_value)
+            if guided_config_path.exists() and guided_config_path.is_file():
+                try:
+                    guided_config_payload = json.loads(guided_config_path.read_text(encoding="utf-8"))
+                    if isinstance(guided_config_payload, dict):
+                        guided_training_mode = str(guided_config_payload.get("training_mode", "") or "").strip().lower()
+                except Exception:
+                    guided_training_mode = ""
+        use_direct_guided_conversion = (
+            use_full_blueprint_conversion
+            and (
+                selected_package_mode == "persona-v1.1"
+                or is_direct_aligned_package_mode(selected_package_mode)
+            )
+            and guided_training_mode in {"persona-paired-mapper-v1.1", "concert-paired-mapper-v1.1", "suno-aligned-mapper-v1.1"}
+        )
 
         if update_status is not None:
             update_status(
                 {
                     "progress": 34,
                     "message": (
-                        "Extracting the guide blueprint and rebuilding the full target voice from the de-personafied vocal."
-                        if use_full_blueprint_conversion
-                        else "Converting the prepared source into the selected voice."
+                        "Running direct concert remaster frame-mapped conversion."
+                        if selected_package_mode == "concert-remaster-paired"
+                        else (
+                            "Running direct aligned SUNO -> target frame-mapped conversion."
+                            if is_direct_aligned_package_mode(selected_package_mode)
+                            else "Running direct Persona v1.1 frame-mapped conversion."
+                            if use_direct_guided_conversion
+                            else (
+                                "Running direct Persona voice-builder conversion."
+                                if use_full_blueprint_conversion
+                                else "Running direct voice conversion with the selected model."
+                            )
+                        )
                     ),
                 }
             )
@@ -1010,27 +1070,32 @@ class MasterConversionEngine:
         raw_render_dir.mkdir(parents=True, exist_ok=True)
         raw_converted_path = raw_render_dir / "converted_raw.wav"
         if use_full_blueprint_conversion:
-            guide_scoring = self.repair_engine.scorer.analyze_audio(
-                source_reference["prepared_audio"],
-                int(source_reference["sample_rate"]),
-                lyrics,
-            )
             checkpoint_path = Path(str(guided_bundle.get("checkpoint_path", "") or "").strip())
             config_value = str(guided_bundle.get("config_path", "") or "").strip()
             manifest_value = str(guided_bundle.get("manifest_path", "") or "").strip()
             training_report_value = str(guided_bundle.get("training_report_path", "") or "").strip()
-            synthesis_metadata = self.backend.pipa_store.guided_svs.synthesize_full_song_from_blueprint(
-                checkpoint_path=checkpoint_path,
-                config_path=(Path(config_value) if config_value else None),
-                manifest_path=(Path(manifest_value) if manifest_value else None),
-                training_report_path=(Path(training_report_value) if training_report_value else None),
-                guide_audio_path=Path(str(source_reference["prepared_path"])),
-                lyrics=lyrics,
-                output_path=raw_converted_path,
-                phrase_word_scores=list(guide_scoring.get("word_scores", [])),
-            )
+            if use_direct_guided_conversion:
+                synthesis_metadata = self.backend.pipa_store.guided_svs.synthesize_direct_guide_v11(
+                    checkpoint_path=checkpoint_path,
+                    config_path=(Path(config_value) if config_value else None),
+                    manifest_path=(Path(manifest_value) if manifest_value else None),
+                    training_report_path=(Path(training_report_value) if training_report_value else None),
+                    guide_audio_path=input_path,
+                    output_path=raw_converted_path,
+                )
+            else:
+                synthesis_metadata = self.backend.pipa_store.guided_svs.synthesize_full_song_from_blueprint(
+                    checkpoint_path=checkpoint_path,
+                    config_path=(Path(config_value) if config_value else None),
+                    manifest_path=(Path(manifest_value) if manifest_value else None),
+                    training_report_path=(Path(training_report_value) if training_report_value else None),
+                    guide_audio_path=input_path,
+                    lyrics=lyrics,
+                    output_path=raw_converted_path,
+                    phrase_word_scores=[],
+                )
             raw_metadata = {
-                "sample_rate": int(synthesis_metadata.get("sample_rate", source_reference["sample_rate"])),
+                "sample_rate": int(synthesis_metadata.get("sample_rate", 44100)),
                 "timings": {
                     "npy": 0.0,
                     "f0": 0.0,
@@ -1039,7 +1104,7 @@ class MasterConversionEngine:
             }
         else:
             raw_metadata = self._render_voice_output(
-                source_path=Path(str(source_reference["prepared_path"])),
+                source_path=input_path,
                 output_path=raw_converted_path,
                 output_format="wav",
                 model_name=model_name,
@@ -1049,162 +1114,33 @@ class MasterConversionEngine:
                 blend_percentage=int(blend_percentage),
             )
 
-        repair_limits = self.REPAIR_PRESETS.get(quality_preset, self.REPAIR_PRESETS["balanced"])
-        if use_full_blueprint_conversion:
-            if update_status is not None:
-                update_status(
-                    {
-                        "progress": 78,
-                        "message": "Scoring the full synthesized lead against the intended lyrics.",
-                    }
-                )
-            synthesized_audio, synthesized_sample_rate = self._load_audio(raw_converted_path, sample_rate=44100)
-            synthesis_scoring = self.repair_engine.scorer.analyze_audio(
-                synthesized_audio,
-                synthesized_sample_rate,
-                lyrics,
-            )
-            repair_metadata = {
-                "output_path": raw_converted_path,
-                "sample_rate": int(synthesized_sample_rate),
-                "source_rms_db": self._safe_rms_db(synthesized_audio),
-                "output_rms_db": self._safe_rms_db(synthesized_audio),
-                "best_similarity_score": float(synthesis_scoring.get("similarity_score", 0.0)),
-                "best_word_report": str(synthesis_scoring.get("word_report", "")),
-                "best_letter_report": str(synthesis_scoring.get("letter_report", "")),
-                "best_word_scores": list(synthesis_scoring.get("word_scores", [])),
-                "best_letter_scores": list(synthesis_scoring.get("letter_scores", [])),
-                "variants_tested": 0,
-                "repair_attempts": 0,
-                "repaired_word_count": 0,
-                "detected_word_indices": [],
-                "replacement_strategy": "full-song",
-            }
-        else:
-            if update_status is not None:
-                update_status(
-                    {
-                        "progress": 64,
-                        "message": "Scoring weak lyric regions and rebuilding those gaps with the pronunciation model.",
-                    }
-                )
-
-            reference_bank_path = str(settings.get("pipa_reference_bank_path", "") or "").strip()
-
-            def resolve_reference_candidates(
-                phrase_text: str,
-                phrase_words: List[str],
-                *,
-                limit: int,
-            ) -> List[Dict[str, object]]:
-                if not reference_bank_path:
-                    return []
-                candidates: List[Dict[str, object]] = []
-                base_dir = Path(reference_bank_path).parent / "reference_bank"
-                for entry in self.backend.pipa_store.find_reference_candidates(
-                    reference_bank_path=reference_bank_path,
-                    phrase_text=phrase_text,
-                    words=list(phrase_words),
-                    limit=max(1, int(limit)),
-                ):
-                    candidate = dict(entry)
-                    candidate["file_path"] = str(base_dir / str(entry.get("relative_path", "")))
-                    candidates.append(candidate)
-                return candidates
-
-            repair_metadata = self.repair_engine.repair_with_reference_phrase_patches(
-                source_path=raw_converted_path,
-                reference_path=Path(str(source_reference["prepared_path"])),
-                intended_lyrics=lyrics,
-                output_dir=output_dir / "repair",
-                cancel_event=cancel_event,
-                max_target_words=int(repair_limits["max_target_words"]),
-                reference_bank_candidates_provider=(
-                    None
-                    if not reference_bank_path
-                    else (
-                        lambda phrase_text, phrase_words, metadata: resolve_reference_candidates(
-                            phrase_text,
-                            phrase_words,
-                            limit=3,
-                        )
-                    )
-                ),
-                reference_bank_word_candidates_provider=(
-                    None
-                    if not reference_bank_path
-                    else (
-                        lambda target_word, metadata: resolve_reference_candidates(
-                            target_word,
-                            [target_word],
-                            limit=6,
-                        )
-                    )
-                ),
-                patch_renderer=(
-                    lambda reference_segment_path, rendered_patch_path, phrase_text, metadata: self._guided_patch_renderer(
-                        model_name=model_name,
-                        secondary_model_name=secondary_model_name,
-                        blend_percentage=int(blend_percentage),
-                        settings=settings,
-                        phrase_text=phrase_text,
-                        reference_segment_path=reference_segment_path,
-                        output_path=rendered_patch_path,
-                        work_dir=(
-                            output_dir / "repair" / "patch-work" / f"group_{int(metadata.get('group_index', 0)):02d}"
-                        ),
-                        guided_bundle=guided_bundle,
-                        phrase_word_scores=list(
-                            metadata.get("target_phrase_word_scores", [])
-                            or metadata.get("reference_phrase_word_scores", [])
-                            or []
-                        ),
-                    )
-                ),
-                update_status=(
-                    None
-                    if update_status is None
-                    else lambda payload: update_status(
-                        {
-                            "progress": min(
-                                92,
-                                64 + int(round(max(0.0, min(float(payload.get("progress", 0.0)), 100.0)) * 0.24)),
-                            ),
-                            "message": str(payload.get("message", "")) or "Repairing weak phrase regions.",
-                            "best_similarity_score": float(payload.get("best_similarity_score", 0.0)),
-                            "best_word_report": str(payload.get("best_word_report", "")),
-                            "best_letter_report": str(payload.get("best_letter_report", "")),
-                            "repair_attempts": int(payload.get("repair_attempts", 0)),
-                            "repaired_word_count": int(payload.get("repaired_word_count", 0)),
-                        }
-                    )
-                ),
-                blend_strength=0.98,
-                padding_ms=95.0,
-                replacement_strategy="replace",
-            )
-
         if update_status is not None:
             update_status(
                 {
                     "progress": 94,
-                    "message": "Removing non-lyric tails from the final converted lead.",
+                    "message": "Scoring the direct render for reporting.",
                 }
             )
 
-        final_cleanup = self._final_lyric_gate(
-            input_path=Path(str(repair_metadata["output_path"])),
-            lyrics=lyrics,
-            output_dir=output_dir / "final",
-            outside_gain=float(profile.get("outside_gain", 0.025)),
-        )
+        rendered_audio, rendered_sample_rate = self._load_audio(raw_converted_path, sample_rate=44100)
+        if str(lyrics or "").strip():
+            render_scoring = self.repair_engine.scorer.analyze_audio(
+                rendered_audio,
+                rendered_sample_rate,
+                lyrics,
+            )
+        else:
+            render_scoring = {
+                "similarity_score": 0.0,
+                "word_report": "Lyrics were not provided for this direct conversion.",
+                "letter_report": "",
+            }
 
-        final_wav_path = Path(str(final_cleanup["output_path"]))
         final_output_path = output_dir / f"{input_path.stem}_master_conversion.{output_format}"
         if output_format == "wav":
-            shutil.copy2(str(final_wav_path), str(final_output_path))
+            shutil.copy2(str(raw_converted_path), str(final_output_path))
         else:
-            self.backend._transcode_audio(final_wav_path, final_output_path)
+            self.backend._transcode_audio(raw_converted_path, final_output_path)
 
         metadata_path = output_dir / "master_conversion_report.json"
         metadata_payload = {
@@ -1212,23 +1148,24 @@ class MasterConversionEngine:
             "model_name": model_name,
             "secondary_model_name": secondary_model_name,
             "blend_percentage": int(blend_percentage),
-            "cleanup_mode": str(source_reference.get("cleanup_mode", normalized_preprocess_mode)),
-            "cleanup_strength": int(candidate_strength),
+            "cleanup_mode": "off",
+            "cleanup_strength": 0,
             "quality_preset": quality_preset,
             "output_format": output_format,
             "pipa_manifest_path": str(settings.get("pipa_manifest_path", "")),
             "pipa_reference_bank_path": str(settings.get("pipa_reference_bank_path", "")),
-            "prepared_source_path": str(source_reference["prepared_path"]),
-            "prepared_removed_path": str(source_reference["removed_path"]),
-            "repair_similarity": round(float(repair_metadata.get("best_similarity_score", 0.0)), 2),
-            "final_similarity": round(float(final_cleanup.get("best_similarity_score", 0.0)), 2),
-            "repair_attempts": int(repair_metadata.get("repair_attempts", 0)),
-            "repaired_word_count": int(repair_metadata.get("repaired_word_count", 0)),
+            "prepared_source_path": str(packaged_source_path),
+            "prepared_removed_path": "",
+            "repair_similarity": round(float(render_scoring.get("similarity_score", 0.0)), 2),
+            "final_similarity": round(float(render_scoring.get("similarity_score", 0.0)), 2),
+            "repair_attempts": 0,
+            "repaired_word_count": 0,
             "repair_patch_mode": (
-                "blueprint-full-conversion-v1"
+                "blueprint-direct-conversion-v1"
                 if use_full_blueprint_conversion
-                else "blueprint-gap-fill-v1"
+                else "direct-model-conversion-v1"
             ),
+            "direct_conversion_only": True,
             "guided_regeneration_checkpoint": str(guided_bundle.get("checkpoint_path", "") or ""),
             "timings": {
                 "npy": round(float(raw_metadata["timings"]["npy"]), 2),
@@ -1240,20 +1177,21 @@ class MasterConversionEngine:
 
         return {
             "output_path": final_output_path,
-            "sample_rate": int(final_cleanup["sample_rate"]),
+            "sample_rate": int(rendered_sample_rate),
             "raw_conversion_path": raw_converted_path,
-            "reconstructed_lead_path": Path(str(source_reference["prepared_path"])),
-            "reconstructed_removed_path": Path(str(source_reference["removed_path"])),
-            "repaired_path": Path(str(repair_metadata["output_path"])),
-            "final_removed_path": Path(str(final_cleanup["removed_path"])),
+            "reconstructed_lead_path": packaged_source_path,
+            "reconstructed_removed_path": packaged_source_path,
+            "repaired_path": raw_converted_path,
+            "final_removed_path": raw_converted_path,
             "metadata_path": metadata_path,
             "candidate_reports": [],
             "phrase_choices": [],
-            "best_similarity_score": float(final_cleanup["best_similarity_score"]),
-            "best_word_report": str(final_cleanup["best_word_report"]),
-            "best_letter_report": str(final_cleanup["best_letter_report"]),
-            "repair_attempts": int(repair_metadata.get("repair_attempts", 0)),
-            "repaired_word_count": int(repair_metadata.get("repaired_word_count", 0)),
+            "best_similarity_score": float(render_scoring.get("similarity_score", 0.0)),
+            "best_word_report": str(render_scoring.get("word_report", "")),
+            "best_letter_report": str(render_scoring.get("letter_report", "")),
+            "repair_attempts": 0,
+            "repaired_word_count": 0,
+            "direct_conversion_only": True,
             "timings": {
                 "npy": round(float(raw_metadata["timings"]["npy"]), 2),
                 "f0": round(float(raw_metadata["timings"]["f0"]), 2),

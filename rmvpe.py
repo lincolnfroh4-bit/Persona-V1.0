@@ -16,7 +16,18 @@ class BiGRU(nn.Module):
         )
 
     def forward(self, x):
-        return self.gru(x)[0]
+        # Newer CUDA/cuDNN stacks can reject this GRU path when RMVPE feeds a
+        # non-contiguous tensor. Make it contiguous first, and fall back to the
+        # native PyTorch kernel if cuDNN still refuses the workload.
+        x = x.contiguous()
+        try:
+            return self.gru(x)[0]
+        except RuntimeError as exc:
+            message = str(exc).lower()
+            if "cudnn_status_not_supported" not in message and "non-contiguous" not in message:
+                raise
+            with torch.backends.cudnn.flags(enabled=False):
+                return self.gru(x)[0]
 
 
 class ConvBlockRes(nn.Module):

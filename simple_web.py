@@ -17,7 +17,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional, Sequence
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -38,6 +38,17 @@ from simple_backend import (
 from simple_detag import SimpleDetagger
 from simple_master_conversion import MasterConversionEngine
 from simple_mastering import SimpleMasteringEngine
+from simple_modes import (
+    ALIGNED_SUNO_MODE,
+    NORMAL_RVC_MODE,
+    is_aligned_suno_mode,
+    is_classic_rvc_package_mode,
+    is_direct_aligned_package_mode,
+    is_normal_rvc_mode,
+    normalize_public_training_mode,
+    package_mode_label,
+    public_mode_label,
+)
 from simple_optimize import VoiceSuitabilityOptimizer
 from simple_rebuild import RebuildFeatureBuilder
 from simple_touchup import NeuralClarityRepairEngine
@@ -65,11 +76,15 @@ PERSONA_OUTPUT_MODES = {
     "persona-lyric-repair",
     "persona-aligned-pth",
     "concert-remaster-paired",
+    NORMAL_RVC_MODE,
+    ALIGNED_SUNO_MODE,
 }
 DIRECT_DATASET_OUTPUT_MODES = {
     "persona-aligned-pth",
     "concert-remaster-paired",
     "classic-rvc-support",
+    ALIGNED_SUNO_MODE,
+    NORMAL_RVC_MODE,
 }
 PERSONA_LOGIC_OUTPUT_MODES = {
     "persona-v1",
@@ -78,6 +93,8 @@ PERSONA_LOGIC_OUTPUT_MODES = {
     "persona-aligned-pth",
     "concert-remaster-paired",
     "pipa-logic-only",
+    NORMAL_RVC_MODE,
+    ALIGNED_SUNO_MODE,
 }
 
 # The original RVC codebase relies on many repo-relative paths like "rmvpe.pt".
@@ -87,65 +104,24 @@ os.chdir(REPO_ROOT)
 
 
 def _is_persona_output_mode(output_mode: str) -> bool:
-    return str(output_mode or "").strip().lower() in PERSONA_OUTPUT_MODES
+    normalized = str(output_mode or "").strip().lower()
+    return normalized in PERSONA_OUTPUT_MODES or normalized in {NORMAL_RVC_MODE, ALIGNED_SUNO_MODE}
 
 
 def _is_persona_logic_output_mode(output_mode: str) -> bool:
-    return str(output_mode or "").strip().lower() in PERSONA_LOGIC_OUTPUT_MODES
+    normalized = str(output_mode or "").strip().lower()
+    return normalized in PERSONA_LOGIC_OUTPUT_MODES or normalized in {NORMAL_RVC_MODE, ALIGNED_SUNO_MODE}
 
 
 def _persona_output_label(output_mode: str) -> str:
     normalized = str(output_mode or "").strip().lower()
-    if normalized == "classic-rvc-support":
-        return "Classic RVC + SUNO audition"
-    if normalized == "persona-v1.1":
-        return "Persona v1.1"
-    if normalized == "persona-lyric-repair":
-        return "Persona lyric repair"
-    if normalized == "persona-aligned-pth":
-        return "Persona aligned PTH"
-    if normalized == "concert-remaster-paired":
-        return "Concert remaster"
-    return "Persona v1.0"
+    if normalized in {NORMAL_RVC_MODE, ALIGNED_SUNO_MODE}:
+        return public_mode_label(normalized)
+    return package_mode_label(normalized)
 
 
 def _normalize_training_output_mode(output_mode: str) -> str:
-    normalized = str(output_mode or "").strip().lower()
-    alias_map = {
-        "persona-v1.1": "persona-v1.1",
-        "persona v1.1": "persona-v1.1",
-        "persona 1.1": "persona-v1.1",
-        "v1.1": "persona-v1.1",
-        "persona-v11": "persona-v1.1",
-        "persona v11": "persona-v1.1",
-        "persona-v1": "persona-v1",
-        "persona v1": "persona-v1",
-        "persona v1.0": "persona-v1",
-        "persona 1.0": "persona-v1",
-        "v1": "persona-v1",
-        "v1.0": "persona-v1",
-        "persona-lyric-repair": "persona-lyric-repair",
-        "persona lyric repair": "persona-lyric-repair",
-        "lyric-repair": "persona-lyric-repair",
-        "persona-aligned-pth": "persona-aligned-pth",
-        "persona aligned pth": "persona-aligned-pth",
-        "aligned-pth": "persona-aligned-pth",
-        "classic-rvc-support": "classic-rvc-support",
-        "classic rvc support": "classic-rvc-support",
-        "classic rvc + suno audition": "classic-rvc-support",
-        "classic-rvc": "classic-rvc-support",
-        "classic rvc": "classic-rvc-support",
-        "concert-remaster-paired": "concert-remaster-paired",
-        "concert remaster paired": "concert-remaster-paired",
-        "concert remaster": "concert-remaster-paired",
-        "concert-remaster": "concert-remaster-paired",
-        "pipa-full": "pipa-full",
-        "pipa-lite": "pipa-lite",
-        "pipa-logic-only": "pipa-logic-only",
-        "persona v1.1 / v1.0 backbone (v2)": "v2",
-        "persona v1.1 / v1.0 backbone": "v2",
-    }
-    return alias_map.get(normalized, normalized)
+    return normalize_public_training_mode(output_mode)
 
 
 def _resolve_training_output_mode_fallback(
@@ -155,17 +131,8 @@ def _resolve_training_output_mode_fallback(
     transcript_files: Sequence[UploadFile],
     plan_files: Sequence[UploadFile],
 ) -> str:
-    normalized = _normalize_training_output_mode(output_mode)
-    supported_modes = PERSONA_OUTPUT_MODES | DIRECT_DATASET_OUTPUT_MODES | {"pipa-full", "pipa-lite", "pipa-logic-only"}
-    if normalized in supported_modes:
-        return normalized
-
-    has_alignment_inputs = not transcript_files and not plan_files
-    if has_alignment_inputs:
-        return "classic-rvc-support"
-    if str(version or "").strip().lower() == "v2":
-        return "persona-v1.1"
-    return "persona-v1"
+    del version, transcript_files, plan_files
+    return _normalize_training_output_mode(output_mode)
 
 QUALITY_PRESETS = {
     "fast": {
@@ -488,7 +455,7 @@ class TrainingJobState:
     id: str
     experiment_name: str
     build_index: bool = False
-    output_mode: str = "classic-rvc-support"
+    output_mode: str = NORMAL_RVC_MODE
     epoch_mode: str = "manual-stop"
     status: str = "queued"
     stage: str = "queued"
@@ -527,7 +494,7 @@ class TrainingJobState:
     guided_regeneration_quality_summary: str = ""
     guided_regeneration_last_epoch: int = 0
     guided_regeneration_sample_count: int = 0
-    alignment_tolerance: str = "forgiving"
+    alignment_tolerance: str = "balanced"
     phoneme_mode: str = ""
     matched_audio_files: int = 0
     total_audio_files: int = 0
@@ -3207,24 +3174,13 @@ def start_training_job(
     persona_runtime_session = None
     with training_stop_events_lock:
         cancel_event = training_stop_events.setdefault(job_id, threading.Event())
-    requested_output_mode = str(
-        settings.get("output_mode", "classic-rvc-support") or "classic-rvc-support"
+    requested_output_mode = normalize_public_training_mode(
+        str(settings.get("output_mode", NORMAL_RVC_MODE) or NORMAL_RVC_MODE)
     )
-    classic_support_mode = requested_output_mode == "classic-rvc-support"
-    recipe_mode = (
-        requested_output_mode
-        if (_is_persona_output_mode(requested_output_mode) or classic_support_mode)
-        else "persona-v1"
-    )
-    direct_pair_recipe_mode = requested_output_mode in {
-        "persona-aligned-pth",
-        "concert-remaster-paired",
-    }
-    output_mode = (
-        "pipa-logic-only"
-        if requested_output_mode in PERSONA_LOGIC_OUTPUT_MODES and not direct_pair_recipe_mode
-        else requested_output_mode
-    )
+    classic_support_mode = is_normal_rvc_mode(requested_output_mode)
+    direct_pair_recipe_mode = is_aligned_suno_mode(requested_output_mode)
+    recipe_mode = requested_output_mode
+    output_mode = requested_output_mode
     resume_selection_name = str(settings.get("resume_selection_name", "") or "").strip()
     start_phase = str(settings.get("start_phase", "auto") or "auto").strip()
     warmup_stage_epochs = max(0, int(settings.get("warmup_stage_epochs", 200)))
@@ -3377,7 +3333,91 @@ def start_training_job(
         guided_metadata: Dict[str, object] = {"recipe_mode": recipe_mode}
         late_phase_summary = ""
         checkpoint_preview_controller: Optional[TrainingCheckpointPreviewController] = None
-        direct_pair_mode = recipe_mode in {"persona-aligned-pth", "concert-remaster-paired"}
+        checkpoint_package_epoch = 0
+        checkpoint_package_lock = threading.Lock()
+
+        def publish_training_checkpoint_package(
+            *,
+            epoch: int,
+            model_path: str = "",
+            index_path: str = "",
+            regeneration_update: Optional[Dict[str, object]] = None,
+        ) -> None:
+            nonlocal checkpoint_package_epoch
+            epoch_value = max(0, int(epoch or 0))
+            if epoch_value <= 0:
+                return
+
+            regen_snapshot = dict(guided_metadata)
+            if regeneration_update:
+                regen_snapshot.update(dict(regeneration_update))
+            regen_snapshot.setdefault("recipe_mode", recipe_mode)
+            regen_snapshot["last_epoch"] = max(
+                epoch_value,
+                int(regen_snapshot.get("last_epoch", 0) or 0),
+            )
+
+            with checkpoint_package_lock:
+                if epoch_value <= checkpoint_package_epoch:
+                    return
+                package_metadata = backend.pipa_store.finalize_training_package(
+                    package_id=experiment_name,
+                    build_dir=pipa_build_dir,
+                    label=experiment_name.replace("_", " "),
+                    model_path=str(model_path or ""),
+                    index_path=str(index_path or ""),
+                    settings=settings,
+                    prep_metadata=prep_metadata,
+                    regeneration_metadata=regen_snapshot,
+                )
+                checkpoint_package_epoch = epoch_value
+
+            set_training_job_state(
+                job_id,
+                model_path=str(package_metadata.get("model_path", "") or model_path or ""),
+                index_path=str(package_metadata.get("index_path", "") or index_path or ""),
+                pipa_selection_name=str(package_metadata.get("selection_name", "") or ""),
+                pipa_manifest_path=str(package_metadata.get("manifest_path", "") or ""),
+                phoneme_profile_path=str(package_metadata.get("phoneme_profile_path", "") or ""),
+                rebuild_profile_path=str(package_metadata.get("rebuild_profile_path", "") or ""),
+                rebuild_clip_reports_path=str(package_metadata.get("rebuild_clip_reports_path", "") or ""),
+                training_report_path=str(package_metadata.get("training_report_path", "") or ""),
+                reference_bank_index_path=str(package_metadata.get("reference_bank_index_path", "") or ""),
+                guided_regeneration_path=str(package_metadata.get("guided_regeneration_path", "") or ""),
+                guided_regeneration_config_path=str(package_metadata.get("guided_regeneration_config_path", "") or ""),
+                guided_regeneration_report_path=str(package_metadata.get("guided_regeneration_report_path", "") or ""),
+                guided_regeneration_preview_path=str(package_metadata.get("guided_regeneration_preview_path", "") or ""),
+                guided_regeneration_target_preview_path=str(package_metadata.get("guided_regeneration_target_preview_path", "") or ""),
+                guided_regeneration_best_val_l1=float(regen_snapshot.get("best_val_l1", 0.0) or 0.0),
+                guided_regeneration_best_val_total=float(regen_snapshot.get("best_val_total", 0.0) or 0.0),
+                guided_regeneration_best_target_quality=float(regen_snapshot.get("best_target_quality", 0.0) or 0.0),
+                guided_regeneration_best_epoch=int(regen_snapshot.get("best_epoch", 0) or 0),
+                guided_regeneration_best_phone_accuracy=float(regen_snapshot.get("best_phone_accuracy", 0.0) or 0.0),
+                guided_regeneration_best_lyric_phone_accuracy=float(regen_snapshot.get("best_lyric_phone_accuracy", 0.0) or 0.0),
+                guided_regeneration_best_vuv_accuracy=float(regen_snapshot.get("best_vuv_accuracy", 0.0) or 0.0),
+                guided_regeneration_plateau_epochs=int(regen_snapshot.get("plateau_epochs", 0) or 0),
+                guided_regeneration_hardware_summary=str(regen_snapshot.get("hardware_summary", "") or ""),
+                guided_regeneration_quality_summary=str(regen_snapshot.get("quality_summary", "") or ""),
+                guided_regeneration_last_epoch=epoch_value,
+                guided_regeneration_sample_count=int(regen_snapshot.get("sample_count", 0) or 0),
+            )
+
+        def handle_legacy_checkpoint(payload: Dict[str, object]) -> None:
+            if checkpoint_preview_controller is not None:
+                checkpoint_preview_controller.enqueue(payload)
+            publish_training_checkpoint_package(
+                epoch=int(payload.get("epoch", 0) or 0),
+                model_path=str(payload.get("model_path", "") or ""),
+                regeneration_update={"recipe_mode": recipe_mode},
+            )
+
+        def handle_guided_checkpoint(payload: Dict[str, object]) -> None:
+            publish_training_checkpoint_package(
+                epoch=int(payload.get("epoch", 0) or 0),
+                regeneration_update=dict(payload),
+            )
+
+        direct_pair_mode = is_aligned_suno_mode(recipe_mode) or recipe_mode == "concert-remaster-paired"
         if direct_pair_mode:
             direct_dataset_dir = Path(str(prep_metadata.get("guided_svs_dataset_dir", "") or ""))
             if not direct_dataset_dir.exists():
@@ -3397,7 +3437,7 @@ def start_training_job(
                 message=(
                     "Training the concert remaster paired converter from the curated CONCERT/CD set..."
                     if recipe_mode == "concert-remaster-paired"
-                    else "Training the direct paired aligned converter from the curated BASE/TARGET/SUNO set..."
+                    else "Training the aligned SUNO -> target mapper from the curated BASE/TARGET/SUNO set..."
                 ),
                 progress=32,
                 log_tail=(
@@ -3430,6 +3470,7 @@ def start_training_job(
                 bridge_stage_epochs=bridge_stage_epochs,
                 full_diversity_stage_epochs=full_diversity_stage_epochs,
                 general_refine_stage_epochs=general_refine_stage_epochs,
+                checkpoint_callback=handle_guided_checkpoint,
             )
             metadata = {
                 "model_path": "",
@@ -3496,11 +3537,7 @@ def start_training_job(
                     progress=progress,
                 ),
                 cancel_event=cancel_event,
-                checkpoint_callback=(
-                    checkpoint_preview_controller.enqueue
-                    if checkpoint_preview_controller is not None
-                    else None
-                ),
+                checkpoint_callback=handle_legacy_checkpoint,
             )
             if checkpoint_preview_controller is not None:
                 checkpoint_preview_controller.wait_for_idle()
@@ -3539,6 +3576,7 @@ def start_training_job(
                 bridge_stage_epochs=bridge_stage_epochs,
                 full_diversity_stage_epochs=full_diversity_stage_epochs,
                 general_refine_stage_epochs=general_refine_stage_epochs,
+                checkpoint_callback=handle_guided_checkpoint,
             )
 
             guided_dataset_features_dir = Path(str(prep_metadata["guided_svs_dataset_dir"])) / "features"
@@ -3593,6 +3631,7 @@ def start_training_job(
                         progress=progress,
                     ),
                     cancel_event=cancel_event,
+                    checkpoint_callback=handle_legacy_checkpoint,
                 )
         guided_dataset_features_dir = Path(str(prep_metadata.get("guided_svs_dataset_dir", "") or "")) / "features"
         if guided_dataset_features_dir.exists():
@@ -3668,7 +3707,7 @@ def start_training_job(
                 else (
                     "Training finished. Your package now includes the concert remaster checkpoint and conversion metadata."
                     if recipe_mode == "concert-remaster-paired"
-                    else "Training finished. Your package now includes the direct paired converter checkpoint and conversion metadata."
+                    else "Training finished. Your package now includes the aligned SUNO -> target mapper checkpoint and conversion metadata."
                 )
             )
             completion_tail = (
@@ -3722,8 +3761,8 @@ def start_training_job(
             log_tail=completion_tail,
             stop_requested=cancel_event.is_set(),
             stopped_early=stopped_early,
-            model_path=str(metadata["model_path"]),
-            index_path=str(metadata["index_path"]),
+            model_path=str(package_metadata.get("model_path", "") or metadata["model_path"]),
+            index_path=str(package_metadata.get("index_path", "") or metadata["index_path"]),
             pipa_selection_name=str(package_metadata["selection_name"]),
             pipa_manifest_path=str(package_metadata["manifest_path"]),
             phoneme_profile_path=str(package_metadata["phoneme_profile_path"]),
@@ -5149,8 +5188,9 @@ def rebuild_options() -> Dict[str, object]:
     return {
         "packages": packages,
         "note": (
-            "These packages contain lyric-aware rebuild references. The rebuild plan uses your "
-            "guide vocal plus lyrics to map phrases and words onto the trained package style."
+            "Normal RVC packages provide a standard checkpoint and index. Aligned SUNO packages "
+            "provide a direct SUNO-to-target mapper plus the alignment metadata needed for "
+            "paired conversion. Older lyric-aware legacy bundles can still appear here."
         ),
     }
 
@@ -5178,7 +5218,7 @@ def stop_training_job(job_id: str) -> Dict[str, object]:
             if job.stage in {"pipa-svs-data", "persona-base", "persona-paired", "persona-dataset"}
             else (
                 "Stop requested. Finishing the current alignment chunk..."
-                if job.output_mode in PERSONA_LOGIC_OUTPUT_MODES
+                if is_aligned_suno_mode(normalize_public_training_mode(job.output_mode))
                 else "Stop requested. Finishing the current training checkpoint..."
             )
         ),
@@ -5346,7 +5386,11 @@ async def create_master_conversion_job(
         selected_package_mode == "persona-v1.1"
         and selected_training_mode == "persona-paired-mapper-v1.1"
     )
-    lyrics_required = not (direct_v11_mode or selected_package_mode == "persona-aligned-pth")
+    lyrics_required = not (
+        direct_v11_mode
+        or is_direct_aligned_package_mode(selected_package_mode)
+        or is_classic_rvc_package_mode(selected_package_mode)
+    )
     if lyrics_required and not clean_lyrics:
         raise HTTPException(status_code=400, detail="Paste the intended lyrics first.")
 
@@ -6212,10 +6256,10 @@ async def create_training_job(
     sample_rate: str = Form("40k"),
     version: str = Form("v2"),
     f0_method: str = Form("rmvpe"),
-    output_mode: str = Form("classic-rvc-support"),
+    output_mode: str = Form(NORMAL_RVC_MODE),
     epoch_mode: str = Form("manual-stop"),
-    alignment_tolerance: str = Form("forgiving"),
-    total_epochs: int = Form(1200),
+    alignment_tolerance: str = Form("balanced"),
+    total_epochs: int = Form(180),
     warmup_stage_epochs: int = Form(200),
     bridge_stage_epochs: int = Form(500),
     full_diversity_stage_epochs: int = Form(500),
@@ -6245,18 +6289,9 @@ async def create_training_job(
         raise HTTPException(
             status_code=400, detail="Please upload at least one audio file to train on."
         )
-    normalized_output_mode = str(output_mode or "").strip().lower()
-    direct_pair_mode = normalized_output_mode in {
-        "persona-aligned-pth",
-        "concert-remaster-paired",
-    }
-    classic_support_mode = normalized_output_mode == "classic-rvc-support"
-    transcript_free_mode = normalized_output_mode in DIRECT_DATASET_OUTPUT_MODES
-    if (not transcript_files and not plan_files) and not transcript_free_mode:
-        raise HTTPException(
-            status_code=400,
-            detail="Please upload either transcripts or a persona training plan manifest to build a Persona package.",
-        )
+    output_mode = normalize_public_training_mode(output_mode)
+    direct_pair_mode = is_aligned_suno_mode(output_mode)
+    classic_support_mode = is_normal_rvc_mode(output_mode)
     options = trainer.get_options()
     if sample_rate not in set(options["sample_rates"]):
         raise HTTPException(status_code=400, detail="Unsupported sample rate.")
@@ -6266,12 +6301,10 @@ async def create_training_job(
         raise HTTPException(status_code=400, detail="Unsupported pitch extraction method.")
     if direct_pair_mode:
         epoch_mode = "fixed"
-        alignment_tolerance = "forgiving"
         resume_selection_name = ""
         start_phase = "auto"
     if classic_support_mode:
         epoch_mode = "fixed"
-        alignment_tolerance = "forgiving"
         resume_selection_name = ""
         start_phase = "auto"
     if epoch_mode not in {"fixed", "manual-stop"}:
@@ -6364,7 +6397,7 @@ async def create_training_job(
         with target.open("wb") as handle:
             handle.write(await upload.read())
 
-    build_index = output_mode in {"pipa-full", "classic-rvc-support"}
+    build_index = is_normal_rvc_mode(output_mode)
     job = TrainingJobState(
         id=job_id,
         experiment_name=chosen_name,

@@ -1,7 +1,9 @@
 import torch, traceback, os, pdb, sys
+from pathlib import Path
 
-now_dir = os.getcwd()
-sys.path.append(now_dir)
+now_dir = str(Path(__file__).resolve().parent.parent)
+if now_dir not in sys.path:
+    sys.path.append(now_dir)
 from collections import OrderedDict
 from i18n import I18nAuto
 

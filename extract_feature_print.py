@@ -18,6 +18,20 @@ import torch
 import torch.nn.functional as F
 import soundfile as sf
 import numpy as np
+
+# PyTorch 2.6+ defaults torch.load(..., weights_only=True), but the
+# upstream HuBERT checkpoint bundled with this project is a full trusted
+# fairseq checkpoint that still needs the older loader behavior.
+_original_torch_load = torch.load
+
+
+def _compat_torch_load(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    return _original_torch_load(*args, **kwargs)
+
+
+torch.load = _compat_torch_load
+
 from fairseq import checkpoint_utils
 
 device = "cpu"
@@ -25,6 +39,7 @@ if torch.cuda.is_available():
     device = "cuda"
 elif torch.backends.mps.is_available():
     device = "mps"
+active_device = device
 
 f = open("%s/extract_f0_feature.log" % exp_dir, "a+")
 
@@ -81,6 +96,50 @@ if device not in ["mps", "cpu"]:
     model = model.half()
 model.eval()
 
+
+def _move_model_to(target_device):
+    global model, active_device
+    if active_device == target_device:
+        return
+    model = model.to(target_device)
+    if target_device == "cuda":
+        model = model.half()
+    else:
+        model = model.float()
+    model.eval()
+    active_device = target_device
+    printt("move model to %s" % target_device)
+
+
+def _extract_features_with_fallback(feats, padding_mask):
+    global model, active_device
+    for target_device in [active_device, "cpu"]:
+        try:
+            _move_model_to(target_device)
+            inputs = {
+                "source": feats.half().to(target_device)
+                if target_device not in ["mps", "cpu"]
+                else feats.to(target_device),
+                "padding_mask": padding_mask.to(target_device),
+                "output_layer": 9 if version == "v1" else 12,
+            }
+            with torch.no_grad():
+                logits = model.extract_features(**inputs)
+                return model.final_proj(logits[0]) if version == "v1" else logits[0]
+        except torch.cuda.OutOfMemoryError:
+            if target_device != "cuda":
+                raise
+            printt("cuda-oom-during-hubert; retrying on cpu for this and later clips")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except RuntimeError as exc:
+            if target_device != "cuda" or "out of memory" not in str(exc).lower():
+                raise
+            printt("cuda-runtime-oom-during-hubert; retrying on cpu for this and later clips")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    raise RuntimeError("HuBERT feature extraction failed after retrying on CPU.")
+
 todo = sorted(list(os.listdir(wavPath)))[i_part::n_part]
 n = max(1, len(todo) // 10)  # 最多打印十条
 if len(todo) == 0:
@@ -98,18 +157,7 @@ else:
 
                 feats = readwave(wav_path, normalize=saved_cfg.task.normalize)
                 padding_mask = torch.BoolTensor(feats.shape).fill_(False)
-                inputs = {
-                    "source": feats.half().to(device)
-                    if device not in ["mps", "cpu"]
-                    else feats.to(device),
-                    "padding_mask": padding_mask.to(device),
-                    "output_layer": 9 if version == "v1" else 12,  # layer 9
-                }
-                with torch.no_grad():
-                    logits = model.extract_features(**inputs)
-                    feats = (
-                        model.final_proj(logits[0]) if version == "v1" else logits[0]
-                    )
+                feats = _extract_features_with_fallback(feats, padding_mask)
 
                 feats = feats.squeeze(0).float().cpu().numpy()
                 if np.isnan(feats).sum() == 0:

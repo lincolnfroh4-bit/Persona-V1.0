@@ -19,11 +19,20 @@ pipa_models/
 uvr5_weights/
 tmp-*/
 tmp_*/
+tmp/
 tmp-metricgan/
 tmp-sb-asr/
 tmp-sb-ed-asr/
 tmp-sb-tr-asr/
 tmp-simple-web/
+tmp-touchup-ordered-test/
+tmp-touchup-test/
+tmp_touchup_guided_test/
+tmp_touchup_guided_test2/
+tmp_touchup_test/
+tmp_xtts_test/
+test-results/
+runlogs/
 server-*.log
 server-*.err.log
 server-*.out.log
@@ -66,4 +75,11 @@ rmvpe.pt
 run_easiergui.bat
 tensor-launch.py
 values1.json
+NO_STYLIST_H200*.tar.gz
+NO_STYLIST_H200_backup_*/
+New Text Document.txt
+tmp_playwright_convert_debug.spec.js
+tunnel_dbg.err
+tunnel_dbg.out
+vastai_key.txt
 使用需遵守的协议-LICENSE.txt

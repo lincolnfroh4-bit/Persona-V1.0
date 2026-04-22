@@ -3,11 +3,14 @@ import shutil
 import sys
 import json  # Mangio fork using json for preset saving
 import math
+from pathlib import Path
 
 import signal
 
-now_dir = os.getcwd()
-sys.path.append(now_dir)
+now_dir = str(Path(__file__).resolve().parent)
+os.chdir(now_dir)
+if now_dir not in sys.path:
+    sys.path.append(now_dir)
 import traceback, pdb
 import warnings
 

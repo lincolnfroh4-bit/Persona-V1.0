@@ -14,6 +14,13 @@ import ffmpeg
 import numpy as np
 import soundfile as sf
 
+from simple_modes import (
+    ALIGNED_SUNO_MODE,
+    NORMAL_RVC_MODE,
+    is_aligned_suno_mode,
+    is_normal_rvc_mode,
+    normalize_public_training_mode,
+)
 from simple_rebuild import RebuildFeatureBuilder
 from simple_svs import GuidedSVSManager
 from simple_touchup import LetterAwarePronunciationScorer, lyrics_to_words, normalize_lyrics
@@ -1352,12 +1359,46 @@ class PIPAModelStore:
                 break
         return selected
 
+    def _sample_balanced_identity_entries(
+        self,
+        identity_entries: List[object],
+        paired_entries: List[object],
+    ) -> List[object]:
+        if not identity_entries or not paired_entries:
+            return list(identity_entries)
+        keep_count = max(12, min(96, int(round(len(paired_entries) * 0.65))))
+        if len(identity_entries) <= keep_count:
+            return list(identity_entries)
+        sampled_indices = np.linspace(
+            0,
+            len(identity_entries) - 1,
+            num=keep_count,
+            dtype=np.float64,
+        )
+        selected: List[object] = []
+        seen: set[int] = set()
+        for raw_index in sampled_indices:
+            index = int(np.clip(round(float(raw_index)), 0, len(identity_entries) - 1))
+            if index in seen:
+                continue
+            seen.add(index)
+            selected.append(identity_entries[index])
+        if len(selected) < keep_count:
+            for index, entry in enumerate(identity_entries):
+                if index in seen:
+                    continue
+                selected.append(entry)
+                if len(selected) >= keep_count:
+                    break
+        return selected
+
     def _prepare_aligned_pth_training_assets(
         self,
         *,
         package_id: str,
         audio_paths: List[Path],
         output_dir: Path,
+        alignment_tolerance: str,
         update_status: Callable[[str, str, str, int], None],
         cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, object]:
@@ -1420,6 +1461,7 @@ class PIPAModelStore:
             )
 
         matched_pairs: List[Dict[str, object]] = []
+        rejected_pairs: List[Dict[str, object]] = []
         weighted_clip_count = 0
         repeated_clip_count = 0
         base_weighted_clip_count = 0
@@ -1458,6 +1500,31 @@ class PIPAModelStore:
             suno_audio, _ = self._load_audio(suno_path, sample_rate=44100)
             target_duration = float(target_audio.shape[0]) / float(sample_rate)
             suno_duration = float(suno_audio.shape[0]) / float(sample_rate)
+            duration_gap = abs(target_duration - suno_duration)
+            allowed_gap = max(0.12, min(1.0, max(target_duration, suno_duration) * 0.03))
+            if duration_gap > allowed_gap:
+                rejected_pairs.append(
+                    {
+                        "pair_key": pair_key,
+                        "target_file": target_path.name,
+                        "suno_file": suno_path.name,
+                        "target_duration_seconds": round(target_duration, 4),
+                        "suno_duration_seconds": round(suno_duration, 4),
+                        "duration_gap_seconds": round(duration_gap, 4),
+                        "allowed_gap_seconds": round(allowed_gap, 4),
+                        "reason": "duration-gap-too-large-for-aligned-training",
+                    }
+                )
+                update_status(
+                    "aligned-pairs",
+                    f"Skipping misaligned pair {pair_index}/{total_pairs}: {target_path.name}",
+                    (
+                        f"SUNO {suno_path.name} | target {target_duration:.2f}s | "
+                        f"suno {suno_duration:.2f}s | gap {duration_gap:.3f}s > allowed {allowed_gap:.3f}s"
+                    ),
+                    min(28, 8 + int(round((pair_index / float(total_pairs)) * 20))),
+                )
+                continue
             repeat_count = self._estimate_aligned_pair_repeats(target_duration)
             repeated_clip_count += max(0, repeat_count - 1)
             safe_label = slugify_name(pair_key or target_path.stem)
@@ -1566,6 +1633,8 @@ class PIPAModelStore:
             ensure_running()
             target_path = target_lookup[pair_key]
             suno_path = suno_lookup[pair_key]
+            if not any(str(pair.get("pair_key", "")) == pair_key for pair in matched_pairs):
+                continue
             target_audio, sample_rate = self._load_audio(target_path, sample_rate=44100)
             suno_audio, _ = self._load_audio(suno_path, sample_rate=sample_rate)
             direct_entries = self.guided_svs.build_truth_aligned_examples(
@@ -1587,10 +1656,21 @@ class PIPAModelStore:
                 ),
                 cancel_event=cancel_event,
             )
+            pair_report = next(
+                (pair for pair in matched_pairs if str(pair.get("pair_key", "")) == pair_key),
+                None,
+            )
+            if pair_report is not None:
+                pair_report["direct_window_count"] = len(direct_entries)
             guided_svs_entries.extend(direct_entries)
 
         if not guided_svs_entries:
             raise RuntimeError("Paired aligned conversion mode could not build direct mapper training slices.")
+        if not matched_pairs:
+            raise RuntimeError(
+                "No usable aligned TARGET/SUNO pairs remained after sanity checks. "
+                "Make sure each pair is genuinely aligned in timing and duration."
+            )
         update_status(
             "aligned-direct",
             "Finalizing the direct paired converter dataset...",
@@ -1620,6 +1700,7 @@ class PIPAModelStore:
                     "suno_file_count": len(suno_lookup),
                     "pre_file_count": len(suno_lookup),
                     "matched_pairs": matched_pairs,
+                    "rejected_pairs": rejected_pairs,
                 },
                 indent=2,
             ),
@@ -1711,6 +1792,7 @@ class PIPAModelStore:
                     "pre_file_count": len(suno_lookup),
                     "base_file_count": len(base_paths),
                     "matched_pair_count": len(matched_pairs),
+                    "rejected_pair_count": len(rejected_pairs),
                     "base_weighted_clip_count": int(base_weighted_clip_count),
                     "base_repeated_clip_count": int(base_repeated_clip_count),
                     "weighted_clip_count": int(weighted_clip_count),
@@ -1718,6 +1800,7 @@ class PIPAModelStore:
                     "detail_focus_clip_count": int(detail_focus_clip_count),
                     "detail_focus_repeated_clip_count": int(detail_focus_repeated_clip_count),
                     "matched_pairs": matched_pairs,
+                    "rejected_pairs": rejected_pairs,
                 },
                 indent=2,
             ),
@@ -1729,6 +1812,7 @@ class PIPAModelStore:
             "Finished the paired BASE/TARGET/SUNO prep pass.",
             (
                 f"Base clips {len(base_paths)} | matched pairs {len(matched_pairs)} | "
+                f"rejected pairs {len(rejected_pairs)} | "
                 f"weighted clips {weighted_clip_count} | detail clips {detail_focus_clip_count}"
             ),
             30,
@@ -1745,6 +1829,7 @@ class PIPAModelStore:
             "matched_audio_files": len(matched_pairs),
             "total_audio_files": len(audio_paths),
             "skipped_audio_files": skipped_audio_files,
+            "rejected_audio_pair_count": len(rejected_pairs),
             "alignment_tolerance": "prefix-paired",
             "phoneme_mode": "aligned-prefix-audio-pairs",
             "guided_svs_dataset_dir": str(guided_svs_dataset.get("dataset_dir", "")),
@@ -1760,6 +1845,367 @@ class PIPAModelStore:
             "aligned_backbone_phrase_count": len(matched_pairs),
             "aligned_backbone_word_count": 0,
             "aligned_backbone_repeated_clip_count": int(repeated_clip_count + base_repeated_clip_count),
+            "aligned_backbone_detail_clip_count": int(detail_focus_clip_count),
+            "aligned_backbone_detail_repeated_clip_count": int(detail_focus_repeated_clip_count),
+            "training_plan_path": "",
+            "base_voice_clip_count": len(base_paths),
+            "paired_song_count": len(matched_pairs),
+            "depersonafied_variant_count": len(matched_pairs),
+            "build_dir": str(output_dir),
+        }
+
+    def _prepare_suno_aligned_training_assets(
+        self,
+        *,
+        package_id: str,
+        audio_paths: List[Path],
+        output_dir: Path,
+        alignment_tolerance: str,
+        update_status: Callable[[str, str, str, int], None],
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, object]:
+        guided_svs_dataset_dir = output_dir / "_guided_svs_dataset"
+        if guided_svs_dataset_dir.exists():
+            shutil.rmtree(guided_svs_dataset_dir, ignore_errors=True)
+        guided_svs_dataset_dir.mkdir(parents=True, exist_ok=True)
+        normalized_tolerance = str(alignment_tolerance or "balanced").strip().lower()
+        duration_gap_ratio = {
+            "forgiving": 0.05,
+            "balanced": 0.03,
+            "strict": 0.02,
+        }.get(normalized_tolerance, 0.03)
+
+        def ensure_running() -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Training stopped by user.")
+
+        def map_direct_progress(start: int, span: int, item_index: int, item_total: int, fraction: float) -> int:
+            safe_total = max(1, int(item_total))
+            safe_fraction = float(np.clip(float(fraction), 0.0, 1.0))
+            return int(round(start + ((((item_index - 1) + safe_fraction) / float(safe_total)) * span)))
+
+        target_prefixes = ("TARGET", "VOCALP")
+        suno_prefixes = ("SUNO", "PREP", "PRE")
+        target_lookup = {
+            key: path
+            for path in audio_paths
+            for key in [self._aligned_prefix_key(path.name, target_prefixes)]
+            if key and any(Path(path).stem.upper().startswith(prefix) for prefix in target_prefixes)
+        }
+        suno_lookup = {
+            key: path
+            for path in audio_paths
+            for key in [self._aligned_prefix_key(path.name, suno_prefixes)]
+            if key and any(Path(path).stem.upper().startswith(prefix) for prefix in suno_prefixes)
+        }
+        base_paths = [
+            path
+            for path in audio_paths
+            if Path(path).stem.upper().startswith("BASE")
+        ]
+        if not base_paths:
+            raise RuntimeError(
+                "Aligned SUNO mode needs at least one BASE clip so the mapper learns the target voice identity."
+            )
+        if not target_lookup or not suno_lookup:
+            raise RuntimeError(
+                "Aligned SUNO mode needs matched TARGET/SUNO files plus one or more BASE clips. "
+                "Older VOCALP/PREP naming is still accepted."
+            )
+
+        matched_keys = sorted(set(target_lookup.keys()) & set(suno_lookup.keys()))
+        if not matched_keys:
+            raise RuntimeError(
+                "No aligned TARGET/SUNO pairs were found. Use matching names like TARGET_phrase01.wav and SUNO_phrase01.wav. "
+                "Older VOCALP_phrase01.wav and PREP_phrase01.wav names also work."
+            )
+
+        base_entries: List[object] = []
+        paired_entries: List[object] = []
+        matched_pairs: List[Dict[str, object]] = []
+        rejected_pairs: List[Dict[str, object]] = []
+        detail_focus_clip_count = 0
+        detail_focus_repeated_clip_count = 0
+
+        update_status(
+            "aligned-direct",
+            "Preparing the aligned SUNO -> target dataset...",
+            "Building BASE identity windows and DTW-aligned TARGET/SUNO mapping windows.",
+            10,
+        )
+
+        total_base = len(base_paths)
+        for base_index, base_path in enumerate(sorted(base_paths), start=1):
+            ensure_running()
+            base_audio, sample_rate = self._load_audio(base_path, sample_rate=44100)
+            identity_entries = self.guided_svs.build_identity_training_examples(
+                sample_id_prefix=(
+                    f"aligned_base_{base_index:04d}_"
+                    f"{slugify_name(self._aligned_prefix_key(base_path.name, 'BASE') or base_path.stem)}"
+                ),
+                source_name=base_path.name,
+                audio=base_audio,
+                sample_rate=sample_rate,
+                output_dir=guided_svs_dataset_dir,
+                progress_callback=lambda fraction, message, detail, idx=base_index, total=total_base: update_status(
+                    "aligned-base",
+                    message,
+                    detail,
+                    map_direct_progress(10, 10, idx, total, fraction),
+                ),
+                cancel_event=cancel_event,
+            )
+            base_entries.extend(identity_entries)
+
+        total_pairs = len(matched_keys)
+        for pair_index, pair_key in enumerate(matched_keys, start=1):
+            ensure_running()
+            target_path = target_lookup[pair_key]
+            suno_path = suno_lookup[pair_key]
+            target_audio, sample_rate = self._load_audio(target_path, sample_rate=44100)
+            suno_audio, _ = self._load_audio(suno_path, sample_rate=sample_rate)
+            target_duration = float(target_audio.shape[0]) / float(sample_rate)
+            suno_duration = float(suno_audio.shape[0]) / float(sample_rate)
+            duration_gap = abs(target_duration - suno_duration)
+            allowed_gap = max(
+                0.10,
+                min(1.25, max(target_duration, suno_duration) * duration_gap_ratio),
+            )
+            if duration_gap > allowed_gap:
+                rejected_pairs.append(
+                    {
+                        "pair_key": pair_key,
+                        "target_file": target_path.name,
+                        "suno_file": suno_path.name,
+                        "target_duration_seconds": round(target_duration, 4),
+                        "suno_duration_seconds": round(suno_duration, 4),
+                        "duration_gap_seconds": round(duration_gap, 4),
+                        "allowed_gap_seconds": round(allowed_gap, 4),
+                        "reason": "duration-gap-too-large-for-aligned-training",
+                    }
+                )
+                continue
+
+            detail_windows: List[Dict[str, object]] = []
+            for detail_window in self._build_detail_focus_windows(
+                target_audio=target_audio,
+                pre_audio=suno_audio,
+                sample_rate=sample_rate,
+            ):
+                score_value = float(detail_window.get("score", 0.0) or 0.0)
+                repeat_count = 1 + int(score_value >= 0.72)
+                detail_windows.append({**detail_window, "repeat_count": repeat_count})
+                detail_focus_clip_count += 1
+                detail_focus_repeated_clip_count += max(0, repeat_count - 1)
+
+            direct_entries = self.guided_svs.build_truth_aligned_examples(
+                sample_id_prefix=(
+                    f"aligned_pair_{pair_index:04d}_{slugify_name(target_path.stem)}_"
+                    f"{slugify_name(suno_path.stem)}"
+                ),
+                source_name=target_path.name,
+                conditioning_name=suno_path.name,
+                guide_audio=suno_audio,
+                target_audio=target_audio,
+                sample_rate=sample_rate,
+                output_dir=guided_svs_dataset_dir,
+                detail_windows=detail_windows,
+                alignment_tolerance=normalized_tolerance,
+                progress_callback=lambda fraction, message, detail, idx=pair_index, total=total_pairs: update_status(
+                    "aligned-direct-pair",
+                    message,
+                    detail,
+                    map_direct_progress(20, 18, idx, total, fraction),
+                ),
+                cancel_event=cancel_event,
+            )
+            paired_entries.extend(direct_entries)
+            matched_pairs.append(
+                {
+                    "pair_key": pair_key,
+                    "target_file": target_path.name,
+                    "suno_file": suno_path.name,
+                    "target_duration_seconds": round(target_duration, 4),
+                    "suno_duration_seconds": round(suno_duration, 4),
+                    "duration_gap_seconds": round(duration_gap, 4),
+                    "direct_window_count": len(direct_entries),
+                    "detail_focus_windows": [
+                        {
+                            "start_seconds": round(int(window.get("start_sample", 0)) / float(sample_rate), 4),
+                            "end_seconds": round(int(window.get("end_sample", 0)) / float(sample_rate), 4),
+                            "score": round(float(window.get("score", 0.0) or 0.0), 4),
+                            "repeat_count": int(window.get("repeat_count", 1) or 1),
+                        }
+                        for window in detail_windows
+                    ],
+                }
+            )
+
+        if not paired_entries:
+            raise RuntimeError(
+                "No usable TARGET/SUNO pairs remained after sanity checks. "
+                "Use matching names like TARGET_phrase01.wav and SUNO_phrase01.wav."
+            )
+
+        balanced_base_entries = self._sample_balanced_identity_entries(base_entries, paired_entries)
+        guided_svs_entries = list(balanced_base_entries) + list(paired_entries)
+        guided_svs_dataset = self.guided_svs.finalize_training_dataset(
+            dataset_dir=guided_svs_dataset_dir,
+            sample_entries=guided_svs_entries,
+        )
+        recognized_audio_files = len(base_paths) + (len(matched_pairs) * 2)
+        skipped_audio_files = max(0, len(audio_paths) - recognized_audio_files)
+
+        transcript_manifest_path = output_dir / "transcript_manifest.json"
+        transcript_manifest_path.write_text(
+            json.dumps(
+                {
+                    "package_id": package_id,
+                    "created_at": _utc_now_iso(),
+                    "mode": ALIGNED_SUNO_MODE,
+                    "matched_audio_files": len(matched_pairs),
+                    "total_audio_files": len(audio_paths),
+                    "skipped_audio_files": skipped_audio_files,
+                    "base_file_count": len(base_paths),
+                    "target_file_count": len(target_lookup),
+                    "suno_file_count": len(suno_lookup),
+                    "matched_pairs": matched_pairs,
+                    "rejected_pairs": rejected_pairs,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        reference_bank_index_path = output_dir / "reference_bank_index.json"
+        reference_bank_index_path.write_text(
+            json.dumps(
+                {
+                    "created_at": _utc_now_iso(),
+                    "package_id": package_id,
+                    "words": [],
+                    "phrases": [],
+                    "mode": ALIGNED_SUNO_MODE,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        phoneme_profile_path = output_dir / "phoneme_profile.json"
+        phoneme_profile_path.write_text(
+            json.dumps(
+                {
+                    "package_id": package_id,
+                    "created_at": _utc_now_iso(),
+                    "mode": ALIGNED_SUNO_MODE,
+                    "uses_lyrics": False,
+                    "matched_pair_count": len(matched_pairs),
+                    "base_file_count": len(base_paths),
+                    "target_file_count": len(target_lookup),
+                    "suno_file_count": len(suno_lookup),
+                    "training_recipe": {
+                        "mode": ALIGNED_SUNO_MODE,
+                        "pair_discovery": "TARGET_SUNO_prefix_match",
+                        "base_prefix": "BASE",
+                        "target_prefix": "TARGET",
+                        "source_prefix": "SUNO",
+                    },
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        rebuild_clip_reports_path = output_dir / "rebuild_clip_reports.json"
+        rebuild_clip_reports_path.write_text(
+            json.dumps(
+                {
+                    "package_id": package_id,
+                    "created_at": _utc_now_iso(),
+                    "mode": ALIGNED_SUNO_MODE,
+                    "matched_pairs": matched_pairs,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        rebuild_profile_path = output_dir / "rebuild_profile.json"
+        rebuild_profile_path.write_text(
+            json.dumps(
+                {
+                    "package_id": package_id,
+                    "created_at": _utc_now_iso(),
+                    "mode": ALIGNED_SUNO_MODE,
+                    "uses_phrase_templates": False,
+                    "uses_aligned_audio_pairs": True,
+                    "uses_base_identity_clips": bool(base_paths),
+                    "pair_key_strategy": "TARGET_SUNO_prefix_match",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        training_report_path = output_dir / "training_report.json"
+        training_report_path.write_text(
+            json.dumps(
+                {
+                    "package_id": package_id,
+                    "created_at": _utc_now_iso(),
+                    "mode": ALIGNED_SUNO_MODE,
+                    "target_file_count": len(target_lookup),
+                    "suno_file_count": len(suno_lookup),
+                    "base_file_count": len(base_paths),
+                    "matched_pair_count": len(matched_pairs),
+                    "rejected_pair_count": len(rejected_pairs),
+                    "base_window_count": len(base_entries),
+                    "kept_base_window_count": len(balanced_base_entries),
+                    "paired_window_count": len(paired_entries),
+                    "detail_focus_clip_count": int(detail_focus_clip_count),
+                    "detail_focus_repeated_clip_count": int(detail_focus_repeated_clip_count),
+                    "matched_pairs": matched_pairs,
+                    "rejected_pairs": rejected_pairs,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        update_status(
+            "aligned-ready",
+            "Finished the aligned SUNO -> target prep pass.",
+            (
+                f"Base windows {len(balanced_base_entries)}/{len(base_entries)} kept | "
+                f"matched pairs {len(matched_pairs)} | paired windows {len(paired_entries)} | "
+                f"detail windows {detail_focus_clip_count}"
+            ),
+            44,
+        )
+        return {
+            "phoneme_profile_path": str(phoneme_profile_path),
+            "rebuild_profile_path": str(rebuild_profile_path),
+            "rebuild_clip_reports_path": str(rebuild_clip_reports_path),
+            "training_report_path": str(training_report_path),
+            "reference_bank_index_path": str(reference_bank_index_path),
+            "transcript_manifest_path": str(transcript_manifest_path),
+            "reference_word_count": 0,
+            "reference_phrase_count": 0,
+            "matched_audio_files": len(matched_pairs),
+            "total_audio_files": len(audio_paths),
+            "skipped_audio_files": skipped_audio_files,
+            "rejected_audio_pair_count": len(rejected_pairs),
+            "alignment_tolerance": normalized_tolerance,
+            "phoneme_mode": "proxy-activity-frame-mask",
+            "guided_svs_dataset_dir": str(guided_svs_dataset.get("dataset_dir", "")),
+            "guided_svs_stats_path": str(guided_svs_dataset.get("stats_path", "")),
+            "guided_svs_report_path": str(guided_svs_dataset.get("report_path", "")),
+            "guided_svs_sample_count": int(guided_svs_dataset.get("sample_count", 0)),
+            "guided_svs_total_frames": int(guided_svs_dataset.get("total_frames", 0)),
+            "guided_svs_total_seconds": float(guided_svs_dataset.get("total_seconds", 0.0)),
+            "aligned_backbone_dataset_dir": "",
+            "aligned_backbone_clip_count": 0,
+            "aligned_backbone_base_clip_count": len(base_paths),
+            "aligned_backbone_base_weighted_clip_count": 0,
+            "aligned_backbone_phrase_count": len(matched_pairs),
+            "aligned_backbone_word_count": 0,
+            "aligned_backbone_repeated_clip_count": 0,
             "aligned_backbone_detail_clip_count": int(detail_focus_clip_count),
             "aligned_backbone_detail_repeated_clip_count": int(detail_focus_repeated_clip_count),
             "training_plan_path": "",
@@ -2377,15 +2823,16 @@ class PIPAModelStore:
         audio_paths: List[Path],
         transcript_paths: List[Path],
         plan_paths: Optional[List[Path]] = None,
-        output_mode: str = "pipa-full",
+        output_mode: str = NORMAL_RVC_MODE,
         output_dir: Path,
         alignment_tolerance: str,
         update_status: Callable[[str, str, str, int], None],
         cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, object]:
         output_dir.mkdir(parents=True, exist_ok=True)
-        normalized_output_mode = str(output_mode or "pipa-full").strip().lower()
-        if normalized_output_mode == "classic-rvc-support":
+        raw_output_mode = str(output_mode or NORMAL_RVC_MODE).strip().lower()
+        normalized_output_mode = normalize_public_training_mode(raw_output_mode, default=raw_output_mode)
+        if normalized_output_mode == NORMAL_RVC_MODE or raw_output_mode == "classic-rvc-support":
             return self._prepare_classic_rvc_support_training_assets(
                 package_id=package_id,
                 audio_paths=audio_paths,
@@ -2393,19 +2840,12 @@ class PIPAModelStore:
                 update_status=update_status,
                 cancel_event=cancel_event,
             )
-        if normalized_output_mode == "persona-aligned-pth":
-            return self._prepare_aligned_pth_training_assets(
+        if normalized_output_mode == ALIGNED_SUNO_MODE or raw_output_mode == "persona-aligned-pth":
+            return self._prepare_suno_aligned_training_assets(
                 package_id=package_id,
                 audio_paths=audio_paths,
                 output_dir=output_dir,
-                update_status=update_status,
-                cancel_event=cancel_event,
-            )
-        if normalized_output_mode == "concert-remaster-paired":
-            return self._prepare_concert_remaster_training_assets(
-                package_id=package_id,
-                audio_paths=audio_paths,
-                output_dir=output_dir,
+                alignment_tolerance=alignment_tolerance,
                 update_status=update_status,
                 cancel_event=cancel_event,
             )
@@ -3162,6 +3602,7 @@ class PIPAModelStore:
         general_refine_stage_epochs: int = 180,
         target_fit_stage_epochs: int = 0,
         post_process_stage_epochs: int = 0,
+        checkpoint_callback: Optional[Callable[[Dict[str, object]], None]] = None,
     ) -> Dict[str, object]:
         return self.guided_svs.train_guided_regenerator(
             dataset_dir=dataset_dir,
@@ -3183,6 +3624,7 @@ class PIPAModelStore:
             general_refine_stage_epochs=general_refine_stage_epochs,
             target_fit_stage_epochs=target_fit_stage_epochs,
             post_process_stage_epochs=post_process_stage_epochs,
+            checkpoint_callback=checkpoint_callback,
         )
 
     def finalize_training_package(
@@ -3198,28 +3640,90 @@ class PIPAModelStore:
         regeneration_metadata: Optional[Dict[str, object]] = None,
     ) -> Dict[str, object]:
         final_dir = self.root / package_id
-        if final_dir.exists():
-            shutil.rmtree(final_dir, ignore_errors=True)
-        shutil.copytree(build_dir, final_dir)
+        staging_dir = self.root / f".{package_id}.staging"
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        build_dir = Path(build_dir)
+        prep_build_dir = Path(str(prep_metadata.get("build_dir", "") or "")).expanduser()
 
-        model_path_value = str(model_path or "").strip()
-        index_path_value = str(index_path or "").strip()
-        output_mode = str(settings.get("output_mode", "pipa-full") or "pipa-full")
+        copy_source = build_dir
+        if not copy_source.exists() and prep_build_dir.exists():
+            copy_source = prep_build_dir
+
+        if copy_source.exists():
+            shutil.copytree(copy_source, staging_dir)
+        else:
+            staging_dir.mkdir(parents=True, exist_ok=True)
+
+        def _materialize_artifact(path_value: object, target_name: object) -> str:
+            cleaned = str(path_value or "").strip()
+            if not cleaned:
+                return ""
+            source = Path(cleaned).expanduser()
+            target_relative = Path(target_name)
+
+            if copy_source.exists():
+                try:
+                    relative = source.relative_to(copy_source)
+                    staged_path = staging_dir / relative
+                    if staged_path.exists():
+                        return str(final_dir / relative)
+                except Exception:
+                    pass
+
+            if not source.exists() or not source.is_file():
+                staged_path = staging_dir / target_relative
+                return str(final_dir / target_relative) if staged_path.exists() else ""
+
+            target_path = staging_dir / target_relative
+            if target_path.resolve() != source.resolve():
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target_path)
+            return str(final_dir / target_relative)
+
+        prep_artifact_map = {
+            "phoneme_profile_path": "phoneme_profile.json",
+            "rebuild_profile_path": "rebuild_profile.json",
+            "rebuild_clip_reports_path": "rebuild_clip_reports.json",
+            "training_report_path": "training_report.json",
+            "transcript_manifest_path": "transcript_manifest.json",
+            "reference_bank_index_path": "reference_bank_index.json",
+        }
+        for metadata_key, target_name in prep_artifact_map.items():
+            _materialize_artifact(prep_metadata.get(metadata_key, ""), target_name)
+
+        model_source_value = str(model_path or "").strip()
+        index_source_value = str(index_path or "").strip()
+        model_path_value = _materialize_artifact(
+            model_source_value,
+            Path("backbone") / "model" / (Path(model_source_value).name or f"{package_id}.pth"),
+        )
+        index_path_value = _materialize_artifact(
+            index_source_value,
+            Path("backbone") / "index" / (Path(index_source_value).name or f"{package_id}.index"),
+        )
+        output_mode = normalize_public_training_mode(
+            str(settings.get("output_mode", NORMAL_RVC_MODE) or NORMAL_RVC_MODE)
+        )
         regen = dict(regeneration_metadata or {})
         recipe_mode = str(regen.get("recipe_mode", output_mode) or output_mode).strip() or output_mode
         lyric_repair_mode = recipe_mode == "persona-lyric-repair"
+        aligned_suno_mode = recipe_mode == ALIGNED_SUNO_MODE
         aligned_pth_mode = recipe_mode == "persona-aligned-pth"
         concert_remaster_mode = recipe_mode == "concert-remaster-paired"
-        classic_support_mode = recipe_mode == "classic-rvc-support"
+        classic_support_mode = recipe_mode in {NORMAL_RVC_MODE, "classic-rvc-support"}
         direct_persona_v11 = (
-            recipe_mode in {"persona-v1.1", "concert-remaster-paired"}
+            recipe_mode in {"persona-v1.1", "concert-remaster-paired", ALIGNED_SUNO_MODE}
             or str(regen.get("training_mode", "") or "").strip().lower() in {
                 "persona-paired-mapper-v1.1",
                 "concert-paired-mapper-v1.1",
+                "suno-aligned-mapper-v1.1",
             }
         )
         if concert_remaster_mode:
             guided_model_type = "guide-conditioned-concert-remaster-v1.1"
+        elif aligned_suno_mode:
+            guided_model_type = "suno-aligned-direct-mapper-v1.1"
         elif classic_support_mode:
             guided_model_type = "classic-rvc-support-v1"
         elif direct_persona_v11:
@@ -3233,7 +3737,9 @@ class PIPAModelStore:
         else:
             guided_model_type = "guide-conditioned-persona-regenerator-v3"
 
-        if direct_persona_v11:
+        if aligned_suno_mode:
+            guided_conditioning = ["guide_mel", "content_features", "beat_phase", "base_identity_examples"]
+        elif direct_persona_v11:
             guided_conditioning = ["content_features", "beat_phase", "target_voice_prototype"]
         elif classic_support_mode:
             guided_conditioning = ["base_identity_truth", "optional_target_truth", "suno_audition_preview"]
@@ -3244,6 +3750,8 @@ class PIPAModelStore:
 
         if concert_remaster_mode:
             rebuild_plan_version = "guide-conditioned-concert-remaster-plan-v1"
+        elif aligned_suno_mode:
+            rebuild_plan_version = "suno-aligned-direct-plan-v1"
         elif classic_support_mode:
             rebuild_plan_version = "classic-rvc-support-plan-v1"
         elif aligned_pth_mode:
@@ -3254,18 +3762,82 @@ class PIPAModelStore:
             rebuild_plan_version = "guide-conditioned-reformation-plan-v1.1"
         else:
             rebuild_plan_version = "guide-conditioned-resynthesis-plan-v1"
-        rvc_model_name = Path(model_path_value).name if model_path_value else ""
+        rvc_model_name = Path(model_path_value).name if model_path_value else (
+            Path(model_source_value).name if model_source_value else ""
+        )
 
-        def map_build_path(path_value: str) -> str:
+        def materialize_regen_path(path_value: object, relative_prefix: str) -> str:
             cleaned = str(path_value or "").strip()
-            if not cleaned:
-                return ""
-            candidate = Path(cleaned)
-            try:
-                relative = candidate.relative_to(build_dir)
-                return str(final_dir / relative)
-            except Exception:
-                return str(candidate) if candidate.exists() else ""
+            fallback_name = Path(cleaned).name or "artifact.bin"
+            return _materialize_artifact(
+                cleaned,
+                Path(relative_prefix) / fallback_name,
+            )
+
+        guided_regeneration_path = materialize_regen_path(
+            regen.get("checkpoint_path", ""),
+            "guided_regeneration",
+        )
+        guided_regeneration_latest_path = materialize_regen_path(
+            regen.get("latest_checkpoint_path", ""),
+            "guided_regeneration",
+        )
+        guided_regeneration_config_path = materialize_regen_path(
+            regen.get("config_path", ""),
+            "guided_regeneration",
+        )
+        guided_regeneration_stats_path = materialize_regen_path(
+            prep_metadata.get("guided_svs_stats_path", ""),
+            "guided_regeneration",
+        )
+        guided_regeneration_report_path = materialize_regen_path(
+            regen.get("report_path", ""),
+            "guided_regeneration",
+        )
+        guided_post_process_path = materialize_regen_path(
+            regen.get("post_process_checkpoint_path", ""),
+            "guided_post_process",
+        )
+        guided_post_process_latest_path = materialize_regen_path(
+            regen.get("post_process_latest_checkpoint_path", ""),
+            "guided_post_process",
+        )
+        guided_post_process_config_path = materialize_regen_path(
+            regen.get("post_process_config_path", ""),
+            "guided_post_process",
+        )
+        guided_post_process_report_path = materialize_regen_path(
+            regen.get("post_process_report_path", ""),
+            "guided_post_process",
+        )
+        guided_vocoder_path = materialize_regen_path(
+            regen.get("vocoder_checkpoint_path", ""),
+            "guided_vocoder",
+        )
+        guided_vocoder_latest_path = materialize_regen_path(
+            regen.get("vocoder_latest_checkpoint_path", ""),
+            "guided_vocoder",
+        )
+        guided_vocoder_config_path = materialize_regen_path(
+            regen.get("vocoder_config_path", ""),
+            "guided_vocoder",
+        )
+        guided_vocoder_report_path = materialize_regen_path(
+            regen.get("vocoder_report_path", ""),
+            "guided_vocoder",
+        )
+        guided_vocoder_history_path = materialize_regen_path(
+            regen.get("vocoder_history_path", ""),
+            "guided_vocoder",
+        )
+        guided_regeneration_preview_path = materialize_regen_path(
+            regen.get("preview_path", ""),
+            "guided_regeneration",
+        )
+        guided_regeneration_target_preview_path = materialize_regen_path(
+            regen.get("target_preview_path", ""),
+            "guided_regeneration",
+        )
 
         manifest = {
             "package_version": 1,
@@ -3284,22 +3856,22 @@ class PIPAModelStore:
             "training_report_path": str(final_dir / "training_report.json"),
             "transcript_manifest_path": str(final_dir / "transcript_manifest.json"),
             "reference_bank_index_path": str(final_dir / "reference_bank_index.json"),
-            "guided_regeneration_path": map_build_path(str(regen.get("checkpoint_path", "") or "")),
-            "guided_regeneration_latest_path": map_build_path(str(regen.get("latest_checkpoint_path", "") or "")),
-            "guided_regeneration_config_path": map_build_path(str(regen.get("config_path", "") or "")),
-            "guided_regeneration_stats_path": map_build_path(str(prep_metadata.get("guided_svs_stats_path", "") or "")),
-            "guided_regeneration_report_path": map_build_path(str(regen.get("report_path", "") or "")),
-            "guided_post_process_path": map_build_path(str(regen.get("post_process_checkpoint_path", "") or "")),
-            "guided_post_process_latest_path": map_build_path(str(regen.get("post_process_latest_checkpoint_path", "") or "")),
-            "guided_post_process_config_path": map_build_path(str(regen.get("post_process_config_path", "") or "")),
-            "guided_post_process_report_path": map_build_path(str(regen.get("post_process_report_path", "") or "")),
-            "guided_vocoder_path": map_build_path(str(regen.get("vocoder_checkpoint_path", "") or "")),
-            "guided_vocoder_latest_path": map_build_path(str(regen.get("vocoder_latest_checkpoint_path", "") or "")),
-            "guided_vocoder_config_path": map_build_path(str(regen.get("vocoder_config_path", "") or "")),
-            "guided_vocoder_report_path": map_build_path(str(regen.get("vocoder_report_path", "") or "")),
-            "guided_vocoder_history_path": map_build_path(str(regen.get("vocoder_history_path", "") or "")),
-            "guided_regeneration_preview_path": map_build_path(str(regen.get("preview_path", "") or "")),
-            "guided_regeneration_target_preview_path": map_build_path(str(regen.get("target_preview_path", "") or "")),
+            "guided_regeneration_path": guided_regeneration_path,
+            "guided_regeneration_latest_path": guided_regeneration_latest_path,
+            "guided_regeneration_config_path": guided_regeneration_config_path,
+            "guided_regeneration_stats_path": guided_regeneration_stats_path,
+            "guided_regeneration_report_path": guided_regeneration_report_path,
+            "guided_post_process_path": guided_post_process_path,
+            "guided_post_process_latest_path": guided_post_process_latest_path,
+            "guided_post_process_config_path": guided_post_process_config_path,
+            "guided_post_process_report_path": guided_post_process_report_path,
+            "guided_vocoder_path": guided_vocoder_path,
+            "guided_vocoder_latest_path": guided_vocoder_latest_path,
+            "guided_vocoder_config_path": guided_vocoder_config_path,
+            "guided_vocoder_report_path": guided_vocoder_report_path,
+            "guided_vocoder_history_path": guided_vocoder_history_path,
+            "guided_regeneration_preview_path": guided_regeneration_preview_path,
+            "guided_regeneration_target_preview_path": guided_regeneration_target_preview_path,
             "pronunciation_strategy": {
                 "unit_mode": str(prep_metadata.get("phoneme_mode", "approx-pronunciation-units")),
                 "alignment_tolerance": str(prep_metadata.get("alignment_tolerance", "balanced")),
@@ -3376,12 +3948,18 @@ class PIPAModelStore:
                 "aligned_backbone_clip_count": int(prep_metadata.get("aligned_backbone_clip_count", 0)),
             },
         }
-        manifest_path = final_dir / "manifest.json"
+        manifest_path = staging_dir / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        if final_dir.exists():
+            shutil.rmtree(final_dir, ignore_errors=True)
+        staging_dir.replace(final_dir)
+        manifest_path = final_dir / "manifest.json"
         self._reference_index_cache.pop(str(final_dir / "reference_bank_index.json"), None)
         return {
             "selection_name": str(manifest["selection_name"]),
             "manifest_path": str(manifest_path),
+            "model_path": str(manifest.get("model_path", "") or ""),
+            "index_path": str(manifest.get("index_path", "") or ""),
             "phoneme_profile_path": str(final_dir / "phoneme_profile.json"),
             "rebuild_profile_path": str(final_dir / "rebuild_profile.json"),
             "rebuild_clip_reports_path": str(final_dir / "rebuild_clip_reports.json"),

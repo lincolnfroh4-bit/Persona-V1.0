@@ -38,6 +38,16 @@ except:
     print("Temp Issue. echl is not being passed with argument!")
     extraction_crepe_hop_length = 128
 
+
+def _using_cpu_rmvpe() -> bool:
+    if f0method != "rmvpe":
+        return False
+    return os.environ.get("RVC_FORCE_RMVPE_CPU", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
 # print("EXTRACTION CREPE HOP LENGTH: " + str(extraction_crepe_hop_length))
 # print("EXTRACTION CREPE HOP LENGTH TYPE: " + str(type(extraction_crepe_hop_length)))
 
@@ -52,6 +62,56 @@ class FeatureInput(object):
         self.f0_min = 50.0
         self.f0_mel_min = 1127 * np.log(1 + self.f0_min / 700)
         self.f0_mel_max = 1127 * np.log(1 + self.f0_max / 700)
+        self.rmvpe_device = None
+
+    def _rmvpe_device_candidates(self):
+        force_cpu = os.environ.get("RVC_FORCE_RMVPE_CPU", "1").lower() not in (
+            "0",
+            "false",
+            "no",
+        )
+        if torch.cuda.is_available() and not force_cpu:
+            return ["cuda:0", "cpu"]
+        return ["cpu"]
+
+    def _load_rmvpe(self, device):
+        from rmvpe import RMVPE
+
+        if getattr(self, "model_rmvpe", None) is not None and self.rmvpe_device == device:
+            return self.model_rmvpe
+        print(f"loading rmvpe model on {device}")
+        self.model_rmvpe = RMVPE("rmvpe.pt", is_half=False, device=device)
+        self.rmvpe_device = device
+        return self.model_rmvpe
+
+    def _infer_rmvpe_with_fallback(self, x):
+        last_error = None
+        for device in self._rmvpe_device_candidates():
+            try:
+                model = self._load_rmvpe(device)
+                return model.infer_from_audio(x, thred=0.03)
+            except torch.OutOfMemoryError as error:
+                last_error = error
+                print(
+                    f"rmvpe {device} ran out of memory, falling back to CPU extraction"
+                )
+            except RuntimeError as error:
+                if "cudnn_status_not_supported" not in str(error).lower():
+                    raise
+                last_error = error
+                print(
+                    f"rmvpe {device} hit a cuDNN kernel issue, falling back to CPU extraction"
+                )
+            if device.startswith("cuda"):
+                if hasattr(self, "model_rmvpe"):
+                    del self.model_rmvpe
+                    self.model_rmvpe = None
+                self.rmvpe_device = None
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("RMVPE extraction failed before inference started.")
 
     # EXPERIMENTAL. PROBABLY BUGGY
     def get_f0_hybrid_computation(
@@ -237,12 +297,7 @@ class FeatureInput(object):
             )
             f0 = pyworld.stonemask(x.astype(np.double), f0, t, self.fs)
         elif f0_method == "rmvpe":
-            if hasattr(self, "model_rmvpe") == False:
-                from rmvpe import RMVPE
-
-                print("loading rmvpe model")
-                self.model_rmvpe = RMVPE("rmvpe.pt", is_half=False, device="cuda:0")
-            f0 = self.model_rmvpe.infer_from_audio(x, thred=0.03)
+            f0 = self._infer_rmvpe_with_fallback(x)
         elif f0_method == "dio":
             f0, t = pyworld.dio(
                 x.astype(np.double),
@@ -421,14 +476,21 @@ if __name__ == "__main__":
         opt_path2 = "%s/%s" % (opt_root2, name)
         paths.append([inp_path, opt_path1, opt_path2])
 
+    worker_count = n_p
+    if _using_cpu_rmvpe():
+        worker_count = min(worker_count, 2)
+    worker_count = max(1, min(worker_count, len(paths) if paths else 1))
+
     ps = []
     print("Using f0 method: " + f0method)
-    for i in range(n_p):
+    if _using_cpu_rmvpe():
+        print(f"RMVPE is running in CPU-safe mode with {worker_count} worker(s)")
+    for i in range(worker_count):
         p = Process(
             target=featureInput.go,
-            args=(paths[i::n_p], f0method, extraction_crepe_hop_length, i),
+            args=(paths[i::worker_count], f0method, extraction_crepe_hop_length, i),
         )
         ps.append(p)
         p.start()
-    for i in range(n_p):
+    for i in range(worker_count):
         ps[i].join()

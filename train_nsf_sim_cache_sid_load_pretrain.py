@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, socket
 
 now_dir = os.getcwd()
 sys.path.append(os.path.join(now_dir))
@@ -12,8 +12,27 @@ n_gpus = len(hps.gpus.split("-"))
 from random import shuffle, randint
 import traceback, json, argparse, itertools, math, torch, pdb
 
+
+def _env_flag(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _env_int(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
 torch.backends.cudnn.deterministic = False
-torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.benchmark = _env_flag("RVC_TRAIN_CUDNN_BENCHMARK", True)
+torch.backends.cudnn.enabled = _env_flag("RVC_TRAIN_ENABLE_CUDNN", True)
 from torch import nn, optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
@@ -54,6 +73,17 @@ from process_ckpt import savee
 global_step = 0
 
 
+def _unwrap_model(model):
+    return model.module if hasattr(model, "module") else model
+
+
+def _pick_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        return int(sock.getsockname()[1])
+
+
 class EpochRecorder:
     def __init__(self):
         self.last_time = ttime()
@@ -73,8 +103,11 @@ def main():
         n_gpus = 1
     elif n_gpus == 0:
         n_gpus = 1
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = str(randint(20000, 55555))
+    if n_gpus <= 1:
+        run(0, 1, hps)
+        return
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(_pick_free_port())
     children = []
     for i in range(n_gpus):
         subproc = mp.Process(
@@ -98,6 +131,10 @@ def main():
 
 def run(rank, n_gpus, hps):
     global global_step
+    distributed = n_gpus > 1
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = _env_flag("RVC_TRAIN_ENABLE_TF32", True)
+        torch.backends.cudnn.allow_tf32 = _env_flag("RVC_TRAIN_ENABLE_TF32", True)
     if rank == 0:
         logger = utils.get_logger(hps.model_dir)
         logger.info(hps)
@@ -105,9 +142,10 @@ def run(rank, n_gpus, hps):
         writer = SummaryWriter(log_dir=hps.model_dir)
         writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
 
-    dist.init_process_group(
-        backend="gloo", init_method="env://", world_size=n_gpus, rank=rank
-    )
+    if distributed:
+        dist.init_process_group(
+            backend="gloo", init_method="env://", world_size=n_gpus, rank=rank
+        )
     torch.manual_seed(hps.train.seed)
     if torch.cuda.is_available():
         torch.cuda.set_device(rank)
@@ -131,15 +169,23 @@ def run(rank, n_gpus, hps):
         collate_fn = TextAudioCollateMultiNSFsid()
     else:
         collate_fn = TextAudioCollate()
+    worker_count = max(0, _env_int("RVC_TRAIN_NUM_WORKERS", 4))
+    prefetch_factor = max(2, _env_int("RVC_TRAIN_PREFETCH_FACTOR", 4))
+    pin_memory = _env_flag("RVC_TRAIN_PIN_MEMORY", True) and torch.cuda.is_available()
+    persistent_workers = _env_flag("RVC_TRAIN_PERSISTENT_WORKERS", True)
+    loader_kwargs = {
+        "num_workers": worker_count,
+        "shuffle": False,
+        "pin_memory": pin_memory,
+        "collate_fn": collate_fn,
+        "batch_sampler": train_sampler,
+    }
+    if worker_count > 0:
+        loader_kwargs["persistent_workers"] = persistent_workers
+        loader_kwargs["prefetch_factor"] = prefetch_factor
     train_loader = DataLoader(
         train_dataset,
-        num_workers=4,
-        shuffle=False,
-        pin_memory=True,
-        collate_fn=collate_fn,
-        batch_sampler=train_sampler,
-        persistent_workers=True,
-        prefetch_factor=8,
+        **loader_kwargs,
     )
     if hps.if_f0 == 1:
         net_g = RVC_Model_f0(
@@ -175,12 +221,13 @@ def run(rank, n_gpus, hps):
     )
     # net_g = DDP(net_g, device_ids=[rank], find_unused_parameters=True)
     # net_d = DDP(net_d, device_ids=[rank], find_unused_parameters=True)
-    if torch.cuda.is_available():
-        net_g = DDP(net_g, device_ids=[rank])
-        net_d = DDP(net_d, device_ids=[rank])
-    else:
-        net_g = DDP(net_g)
-        net_d = DDP(net_d)
+    if distributed:
+        if torch.cuda.is_available():
+            net_g = DDP(net_g, device_ids=[rank])
+            net_d = DDP(net_d, device_ids=[rank])
+        else:
+            net_g = DDP(net_g)
+            net_d = DDP(net_d)
 
     try:  # 如果能加载自动resume
         _, _, _, epoch_str = utils.load_checkpoint(
@@ -203,7 +250,7 @@ def run(rank, n_gpus, hps):
             if rank == 0:
                 logger.info("loaded pretrained %s" % (hps.pretrainG))
             print(
-                net_g.module.load_state_dict(
+                _unwrap_model(net_g).load_state_dict(
                     torch.load(hps.pretrainG, map_location="cpu")["model"]
                 )
             )  ##测试不加载优化器
@@ -211,7 +258,7 @@ def run(rank, n_gpus, hps):
             if rank == 0:
                 logger.info("loaded pretrained %s" % (hps.pretrainD))
             print(
-                net_d.module.load_state_dict(
+                _unwrap_model(net_d).load_state_dict(
                     torch.load(hps.pretrainD, map_location="cpu")["model"]
                 )
             )
@@ -228,7 +275,7 @@ def run(rank, n_gpus, hps):
     cache = []
     for epoch in range(epoch_str, hps.train.epochs + 1):
         if rank == 0:
-            train_and_evaluate(
+            should_stop = train_and_evaluate(
                 rank,
                 epoch,
                 hps,
@@ -242,7 +289,7 @@ def run(rank, n_gpus, hps):
                 cache,
             )
         else:
-            train_and_evaluate(
+            should_stop = train_and_evaluate(
                 rank,
                 epoch,
                 hps,
@@ -257,6 +304,14 @@ def run(rank, n_gpus, hps):
             )
         scheduler_g.step()
         scheduler_d.step()
+        if distributed:
+            stop_tensor = torch.tensor([1 if should_stop else 0], dtype=torch.int32)
+            dist.broadcast(stop_tensor, src=0)
+            should_stop = bool(int(stop_tensor.item()))
+        if should_stop:
+            break
+    if distributed and dist.is_initialized():
+        dist.destroy_process_group()
 
 
 def train_and_evaluate(
@@ -595,30 +650,31 @@ def train_and_evaluate(
         stopbtn = False
 
     if stopbtn:
-        logger.info("Stop Button was pressed. The program is closed.")
-        if hasattr(net_g, "module"):
-            ckpt = net_g.module.state_dict()
-        else:
-            ckpt = net_g.state_dict()
-        logger.info(
-            "saving final ckpt:%s"
-            % (
-                savee(
-                    ckpt,
-                    hps.sample_rate,
-                    hps.if_f0,
-                    hps.name,
-                    epoch,
-                    hps.version,
-                    hps,
+        if rank == 0:
+            logger.info("Stop Button was pressed. The program is closed.")
+            if hasattr(net_g, "module"):
+                ckpt = net_g.module.state_dict()
+            else:
+                ckpt = net_g.state_dict()
+            logger.info(
+                "saving final ckpt:%s"
+                % (
+                    savee(
+                        ckpt,
+                        hps.sample_rate,
+                        hps.if_f0,
+                        hps.name,
+                        epoch,
+                        hps.version,
+                        hps,
+                    )
                 )
             )
-        )
-        sleep(1)
-        with open("csvdb/stop.csv", "w+", newline="") as STOPCSVwrite:
-            csv_writer = csv.writer(STOPCSVwrite, delimiter=",")
-            csv_writer.writerow(["False"])
-        os._exit(2333333)
+            sleep(1)
+            with open("csvdb/stop.csv", "w+", newline="") as STOPCSVwrite:
+                csv_writer = csv.writer(STOPCSVwrite, delimiter=",")
+                csv_writer.writerow(["False"])
+        return True
 
     if rank == 0:
         logger.info("====> Epoch: {} {}".format(epoch, epoch_recorder.record()))
@@ -641,7 +697,9 @@ def train_and_evaluate(
         with open("csvdb/stop.csv", "w+", newline="") as STOPCSVwrite:
             csv_writer = csv.writer(STOPCSVwrite, delimiter=",")
             csv_writer.writerow(["False"])
-        os._exit(2333333)
+        return True
+
+    return False
 
 
 if __name__ == "__main__":

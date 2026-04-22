@@ -22,15 +22,25 @@ from lib.infer_pack.models import (
     SynthesizerTrnMs768NSFsid,
     SynthesizerTrnMs768NSFsid_nono,
 )
+from simple_modes import (
+    ALIGNED_SUNO_MODE,
+    NORMAL_RVC_MODE,
+    is_classic_rvc_package_mode,
+    is_direct_aligned_package_mode,
+    package_mode_label,
+)
 from simple_pipa import PIPAModelStore
 
 DIRECT_GUIDED_PACKAGE_MODES = {
+    ALIGNED_SUNO_MODE,
+    "persona-aligned-pth",
     "concert-remaster-paired",
 }
 ALIGNED_PTH_PACKAGE_MODES = {
     "persona-aligned-pth",
 }
 CLASSIC_SUPPORT_PACKAGE_MODES = {
+    NORMAL_RVC_MODE,
     "classic-rvc-support",
 }
 
@@ -278,11 +288,7 @@ class SimpleRVCBackend:
             if package_mode in DIRECT_GUIDED_PACKAGE_MODES:
                 if not guided_regeneration_path:
                     continue
-                model_label = (
-                    "Concert remaster"
-                    if package_mode == "concert-remaster-paired"
-                    else "Paired aligned conversion"
-                )
+                model_label = package_mode_label(package_mode)
                 models.append(
                     {
                         "name": str(bundle["name"]),
@@ -338,7 +344,7 @@ class SimpleRVCBackend:
                         "default_index": default_index,
                         "has_index": bool(default_index),
                         "kind": "model",
-                        "system": "Classic RVC + SUNO audition",
+                        "system": package_mode_label(package_mode),
                         "rvc_model_name": str(bundle.get("rvc_model_name", "") or Path(model_path).name),
                         "model_path": model_path,
                         "phoneme_profile_path": str(bundle.get("phoneme_profile_path", "") or ""),
@@ -424,7 +430,7 @@ class SimpleRVCBackend:
                     "selection_name": str(bundle["name"]),
                     "label": str(bundle["label"]),
                     "kind": "model",
-                    "system": "Concert remaster" if package_mode == "concert-remaster-paired" else "Paired aligned conversion",
+                    "system": package_mode_label(package_mode),
                     "rvc_model_name": Path(guided_regeneration_path).name,
                     "model_path": "",
                     "default_index": str(bundle.get("default_index", "") or ""),
@@ -470,7 +476,7 @@ class SimpleRVCBackend:
                     "selection_name": str(bundle["name"]),
                     "label": str(bundle["label"]),
                     "kind": "model",
-                    "system": "Classic RVC + SUNO audition",
+                    "system": package_mode_label(package_mode),
                     "rvc_model_name": str(bundle.get("rvc_model_name", "") or Path(model_path).name),
                     "model_path": model_path,
                     "default_index": str(bundle.get("default_index", "") or ""),
@@ -624,10 +630,20 @@ class SimpleRVCBackend:
             raise RuntimeError(
                 "fairseq is required only for the legacy HuBERT/RVC path and is not installed in the current Python environment."
             ) from exc
-        models, _, _ = checkpoint_utils.load_model_ensemble_and_task(
-            [str(hubert_path)],
-            suffix="",
-        )
+        original_torch_load = torch.load
+
+        def _compat_torch_load(*args, **kwargs):
+            kwargs.setdefault("weights_only", False)
+            return original_torch_load(*args, **kwargs)
+
+        torch.load = _compat_torch_load
+        try:
+            models, _, _ = checkpoint_utils.load_model_ensemble_and_task(
+                [str(hubert_path)],
+                suffix="",
+            )
+        finally:
+            torch.load = original_torch_load
         self.hubert_model = models[0].to(self.config.device)
         if self.config.is_half:
             self.hubert_model = self.hubert_model.half()

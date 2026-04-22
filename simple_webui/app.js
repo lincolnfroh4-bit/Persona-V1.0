@@ -56,6 +56,7 @@ const state = {
   currentTrainingJobId: null,
   trainingPollHandle: null,
   trainingPollInFlight: false,
+  trainingModelRefreshKey: "",
   currentConversionModelName: "",
   currentConversionModelLabel: "",
   currentConversionModelSystem: "",
@@ -4113,11 +4114,27 @@ async function pollTrainingJob(jobId) {
         `${stageLabel}${job.message}`,
         Math.max(percent, 10),
       );
+      const publishedEpoch = Number(
+        job.guided_regeneration_last_epoch
+        || job.checkpoint_preview_epoch
+        || 0,
+      );
+      const refreshKey = [
+        job.id || "",
+        job.pipa_selection_name || "",
+        job.model_path || "",
+        String(publishedEpoch),
+      ].join("|");
+      if ((job.pipa_selection_name || job.model_path) && refreshKey !== state.trainingModelRefreshKey) {
+        state.trainingModelRefreshKey = refreshKey;
+        await loadModels();
+      }
       stopTrainingButton.disabled = Boolean(job.stop_requested);
     } else if (job.status === "completed") {
       setTrainingStatus("completed", "PIPA complete", job.message, 100);
       renderTrainingResult(job);
       await loadModels();
+      state.trainingModelRefreshKey = "";
       stopTrainingButton.disabled = true;
       state.currentTrainingJobId = null;
       clearInterval(state.trainingPollHandle);
@@ -4126,6 +4143,8 @@ async function pollTrainingJob(jobId) {
       setTrainingStatus("completed", "Training stopped", job.message, percent);
       trainingLog.textContent = historyText;
       renderTrainingResult(job);
+      await loadModels();
+      state.trainingModelRefreshKey = "";
       stopTrainingButton.disabled = true;
       state.currentTrainingJobId = null;
       clearInterval(state.trainingPollHandle);
@@ -4134,6 +4153,7 @@ async function pollTrainingJob(jobId) {
       setTrainingStatus("failed", "PIPA build failed", job.error || job.message, percent);
       trainingLog.textContent = job.error || historyText || "Training failed.";
       renderTrainingResult(job);
+      state.trainingModelRefreshKey = "";
       stopTrainingButton.disabled = true;
       state.currentTrainingJobId = null;
       clearInterval(state.trainingPollHandle);
@@ -4446,6 +4466,7 @@ async function startTraining() {
     trainingName.value = payload.experiment_name || trainingName.value;
     state.currentTrainingJobId = payload.job_id;
     state.trainingPollInFlight = false;
+    state.trainingModelRefreshKey = "";
     stopTrainingButton.disabled = false;
     await pollTrainingJob(state.currentTrainingJobId);
     state.trainingPollHandle = setInterval(

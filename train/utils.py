@@ -15,6 +15,21 @@ logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 logger = logging
 
 
+def _figure_to_rgb_array(fig):
+    fig.canvas.draw()
+    if hasattr(fig.canvas, "buffer_rgba"):
+        rgba = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)
+        return np.ascontiguousarray(rgba[..., :3])
+    if hasattr(fig.canvas, "tostring_rgb"):
+        data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        return data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    if hasattr(fig.canvas, "tostring_argb"):
+        data = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
+        data = data.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+        return np.ascontiguousarray(data[..., 1:])
+    raise RuntimeError("Unsupported matplotlib canvas backend for RGB extraction.")
+
+
 def load_checkpoint_d(checkpoint_path, combd, sbd, optimizer=None, load_opt=1):
     assert os.path.isfile(checkpoint_path)
     checkpoint_dict = torch.load(checkpoint_path, map_location="cpu")
@@ -227,9 +242,7 @@ def plot_spectrogram_to_numpy(spectrogram):
     plt.ylabel("Channels")
     plt.tight_layout()
 
-    fig.canvas.draw()
-    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    data = _figure_to_rgb_array(fig)
     plt.close()
     return data
 
@@ -258,9 +271,7 @@ def plot_alignment_to_numpy(alignment, info=None):
     plt.ylabel("Encoder timestep")
     plt.tight_layout()
 
-    fig.canvas.draw()
-    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    data = _figure_to_rgb_array(fig)
     plt.close()
     return data
 
